@@ -40,9 +40,10 @@ var MODES = [MODE_SINGLE, MODE_CONTINUE, MODE_REPEAT_ONE, MODE_REPEAT_ALL]
 // tooltips. `tr(lang, key)` falls back to English.
 var STRINGS = {
   en: {
-    tabSurah: "Surah", tabReciter: "Reciter",
+    tabSurah: "Surah", tabBookmarks: "Bookmarks", tabReciter: "Reciter", tabQuranCom: "Quran.com",
     searchSurah: "Search surah (any language)", searchReciter: "Search reciter",
     language: "Language", noSurahSelected: "No surah selected",
+    pickup: "Pick up", bookmark: "Bookmark", savedBookmarks: "Saved Bookmarks",
     download: "Download", streamOnly: "Stream only", close: "Close",
     downloadPrompt: "Download full mushaf (%1)?",
     downloadDesc: "~2 GB · 114 surahs · plays offline afterwards. You can also stream instead.",
@@ -777,6 +778,10 @@ function formatTime(ms) {
   return m + ":" + (s < 10 ? "0" : "") + s
 }
 
+function formatDuration(ms) {
+  return formatTime(ms)
+}
+
 function formatSize(bytes) {
   if (!bytes || bytes < 0) bytes = 0
   if (bytes < 1024) return bytes + " B"
@@ -801,3 +806,48 @@ function modeLabel(language, mode) {
   }
   return tr(language, "single")
 }
+
+// Mapping of Surah number -> [Juz, Starting Page] in the standard Madinah Mushaf
+var SURAH_JUZ_PAGE = {
+  1: [1, 1], 2: [1, 2], 3: [3, 50], 4: [4, 77], 5: [6, 106],
+  6: [7, 128], 7: [8, 151], 8: [9, 177], 9: [10, 187], 10: [11, 208],
+  11: [11, 221], 12: [12, 235], 13: [13, 249], 14: [13, 255], 15: [14, 262],
+  16: [14, 267], 17: [15, 282], 18: [15, 293], 19: [16, 305], 20: [16, 312],
+  21: [17, 322], 22: [17, 332], 23: [18, 342], 24: [18, 350], 25: [18, 359],
+  26: [19, 367], 27: [19, 377], 28: [20, 385], 29: [20, 396], 30: [21, 404],
+  31: [21, 411], 32: [21, 415], 33: [21, 418], 34: [22, 428], 35: [22, 434],
+  36: [22, 440], 37: [23, 446], 38: [23, 453], 39: [23, 458], 40: [24, 467],
+  41: [24, 477], 42: [25, 483], 43: [25, 489], 44: [25, 496], 45: [25, 499],
+  46: [26, 502], 47: [26, 507], 48: [26, 511], 49: [26, 515], 50: [26, 518],
+  51: [26, 520], 52: [27, 523], 53: [27, 526], 54: [27, 528], 55: [27, 531],
+  56: [27, 534], 57: [27, 537], 58: [28, 542], 59: [28, 545], 60: [28, 549],
+  61: [28, 551], 62: [28, 553], 63: [28, 554], 64: [28, 556], 65: [28, 558],
+  66: [28, 560], 67: [29, 562], 68: [29, 564], 69: [29, 566], 70: [29, 568],
+  71: [29, 570], 72: [29, 572], 73: [29, 574], 74: [29, 575], 75: [29, 577],
+  76: [29, 578], 77: [29, 580], 78: [30, 582], 79: [30, 583], 80: [30, 585],
+  81: [30, 586], 82: [30, 587], 83: [30, 587], 84: [30, 589], 85: [30, 590],
+  86: [30, 591], 87: [30, 591], 88: [30, 592], 89: [30, 593], 90: [30, 594],
+  91: [30, 595], 92: [30, 595], 93: [30, 596], 94: [30, 596], 95: [30, 597],
+  96: [30, 597], 97: [30, 598], 98: [30, 598], 99: [30, 599], 100: [30, 599],
+  101: [30, 600], 102: [30, 600], 103: [30, 601], 104: [30, 601], 105: [30, 601],
+  106: [30, 602], 107: [30, 602], 108: [30, 602], 109: [30, 603], 110: [30, 603],
+  111: [30, 603], 112: [30, 604], 113: [30, 604], 114: [30, 604]
+}
+
+function getSurahJuz(num) {
+  var entry = SURAH_JUZ_PAGE[num]
+  return entry ? entry[0] : 1
+}
+
+function getSurahPage(num) {
+  var entry = SURAH_JUZ_PAGE[num]
+  return entry ? entry[1] : 1
+}
+
+function estimateAyah(totalVerses, posMs, durMs) {
+  if (!totalVerses || totalVerses <= 0) return 1
+  if (!durMs || durMs <= 0) return 1
+  var frac = Math.min(Math.max(posMs / durMs, 0), 1)
+  return Math.max(1, Math.min(Math.floor(frac * totalVerses) + 1, totalVerses))
+}
+

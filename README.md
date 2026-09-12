@@ -1,25 +1,23 @@
-# mus.quran — Quran Player
+# Quran Plugin for Omarchy
 
-![preview](preview.png)
+<p align="center">
+  <img src="assets/preview_surahs.png" alt="Quran Plugin UI" width="380" />
+</p>
 
-A Quran recitation player for the Omarchy bar. Play any surah by any reciter,
-stream it instantly, or download whole mushafs. The playback engine is a small
-**local Go service** (`quranproxyd`) with a CLI companion (`quranctl`) that
-streams, caches, validates, and downloads audio over a hardened loopback
-proxy — attested prebuilt binaries are available from GitHub Releases.
+An elegant, feature-rich Quran recitation player and reader companion for the Omarchy Linux desktop environment. Listen to recitations from world-renowned Qaris, track your reading position across Surahs, Ayahs, Juzs, and Pages, bookmark your progress with instant one-click **Pick Up**, and explore rich Quranic resources with Quran.com integration.
 
-## Features
+---
 
-* Reciter and surah tabs with live, multilingual search (Arabic + 9 languages).
-* Play/pause, prev/next, seek, four playback modes, resume-from-last-position.
-* Instant streaming: byte-range playback starts immediately while the proxy
-  caches in the background (mpv seeks without buffering).
-* Background cache with eviction, a combined "Cache:" readout, and one-click
-  clear.
-* Explicit per-surah and full-mushaf downloads with live progress, resumable
-  across shell restarts.
-* Deep media validation on every fetch (size, MIME, ffprobe) before a file is
-  trusted as a permanent download.
+## Highlights & New Features
+
+* **Spacious & Modern UI**: Roomy 440px layout designed to integrate seamlessly with Omarchy's system theme and typography.
+* **Monochrome Closed Mushaf Icon**: Uniform, clean icon matching the system bar theme.
+* **Reader Location Tracker ("Where The Reader Is")**: Live indicator computing current Surah, estimated Ayah, Juz, Hizb, Page number in the Madinah Mushaf, and progress percentage.
+* **Reading Bookmarks & Instant "Pick Up"**: Save bookmarks with timestamp and ayah position, and pick up right where you left off anytime with a single click.
+* **Quran.com Explore Suite**: Direct one-click access to the current Ayah on Quran.com, Ibn Kathir/Sa'di Tafsir, word-by-word morphology/grammar, Madinah Mushaf layout, and the personalized reading experience guide.
+* **Model Context Protocol (MCP) Server**: Built-in Python MCP server (`mcp/server.py`) exposing reader position, verse lookups, player controls, and bookmark management to AI coding assistants (Claude, Antigravity, etc.).
+* **Instant Streaming & Offline Audio**: Fast byte-range streaming via a hardened loopback Go audio proxy (`quranproxyd`) with deep media validation and background full-mushaf caching.
+* **Multilingual Search**: Live instant search across 114 Surahs and reciters in Arabic, English, and 9 additional languages.
 
 ## Dependencies
 

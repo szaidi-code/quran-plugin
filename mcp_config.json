@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "quran-companion": {
+      "command": "python3",
+      "args": [
+        "/home/szaidi/.config/omarchy/plugins/mus.quran/mcp/server.py"
+      ]
+    }
+  }
+}

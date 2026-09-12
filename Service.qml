@@ -10,8 +10,12 @@ Item {
     property var shell: null
     property var pluginRegistry: null
 
+    signal openTabRequested(string tabName)
+
     readonly property string dataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
+    readonly property string bookmarksPath: dataDir + "/bookmarks.json"
     readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/quran.json"
+    property var bookmarks: []
     // mpv IPC socket lives in a private 0700 runtime dir (created on startup),
     // never /tmp. Falls back under the cache root when XDG_RUNTIME_DIR is unset.
     readonly property string mpvRuntimeDir: (function () {
@@ -1308,6 +1312,92 @@ Item {
         stateFile.setText(JSON.stringify(state));
     }
 
+    function loadBookmarks(json) {
+        if (!json)
+            return;
+        try {
+            var data = JSON.parse(json);
+            if (Array.isArray(data))
+                root.bookmarks = data;
+        } catch (e) {
+            // ignore malformed
+        }
+    }
+
+    function saveBookmarks() {
+        try {
+            bookmarksFile.setText(JSON.stringify(root.bookmarks, null, 2));
+        } catch (e) {
+            console.warn("mus.quran: failed to save bookmarks", e);
+        }
+    }
+
+    function addBookmark(note) {
+        var sNum = root.surahNumber || 1;
+        var sLabel = root.surahLabel(sNum);
+        var rLabel = root.reciterLabel();
+        var rId = root.reciterId || "ar.alafasy";
+        var posMs = root.mpvPositionMs > 0 ? root.mpvPositionMs : (root.savedPosition || 0);
+        var durMs = root.mpvDurationMs > 0 ? root.mpvDurationMs : 0;
+        var curSurahObj = root.currentSurah;
+        var totalVerses = (curSurahObj && (curSurahObj.total_verses || curSurahObj.totalVerses)) ? (curSurahObj.total_verses || curSurahObj.totalVerses) : 100;
+        var estimatedAyah = Model.estimateAyah(totalVerses, posMs, durMs);
+        var page = Model.getSurahPage(sNum);
+        var juz = Model.getSurahJuz(sNum);
+        var arabicName = (curSurahObj && curSurahObj.name) ? curSurahObj.name : "";
+
+        var bm = {
+            id: Date.now().toString(),
+            surah: sNum,
+            surahName: sLabel,
+            surahArabic: arabicName,
+            ayah: estimatedAyah,
+            totalVerses: totalVerses,
+            juz: juz,
+            page: page,
+            reciterId: rId,
+            reciter: rLabel,
+            timestamp_ms: posMs,
+            duration_ms: durMs,
+            note: note || ("Ayah " + estimatedAyah),
+            createdAt: new Date().toISOString()
+        };
+
+        var list = root.bookmarks ? root.bookmarks.slice() : [];
+        list.unshift(bm);
+        root.bookmarks = list;
+        root.saveBookmarks();
+        return bm;
+    }
+
+    function removeBookmark(index) {
+        if (!root.bookmarks || index < 0 || index >= root.bookmarks.length)
+            return false;
+        var list = root.bookmarks.slice();
+        list.splice(index, 1);
+        root.bookmarks = list;
+        root.saveBookmarks();
+        return true;
+    }
+
+    function pickupBookmark(index) {
+        if (!root.bookmarks || index < 0 || index >= root.bookmarks.length)
+            return false;
+        var bm = root.bookmarks[index];
+        if (!bm)
+            return false;
+
+        var reciterToUse = bm.reciterId || root.reciterId;
+        var surahToUse = bm.surah || root.surahNumber;
+        var pos = bm.timestamp_ms || 0;
+
+        root.reciterId = reciterToUse;
+        root.surahNumber = surahToUse;
+        root.savedPosition = pos;
+        root._playSurahOrDownload(reciterToUse, surahToUse, true, pos);
+        return true;
+    }
+
     function loadState(json) {
         if (!json)
             return;
@@ -1672,6 +1762,16 @@ Item {
         onFileChanged: reload()
     }
 
+    FileView {
+        id: bookmarksFile
+        path: root.bookmarksPath
+        watchChanges: true
+        atomicWrites: true
+        printErrors: false
+        onLoaded: root.loadBookmarks(text())
+        onFileChanged: reload()
+    }
+
     Process {
         id: recitersProc
         stdout: StdioCollector {
@@ -1938,6 +2038,48 @@ Item {
         function previous(): string {
             root.previous();
             return "ok";
+        }
+
+        function showQuranCom(): string {
+            root.openTabRequested("qurancom");
+            return "ok";
+        }
+
+        function showSurahs(): string {
+            root.openTabRequested("surah");
+            return "ok";
+        }
+
+        function showReciters(): string {
+            root.openTabRequested("reciter");
+            return "ok";
+        }
+
+        function showBookmarks(): string {
+            root.openTabRequested("bookmarks");
+            return "ok";
+        }
+
+        function bookmark(note: string): string {
+            return JSON.stringify(root.addBookmark(note || ""));
+        }
+
+        function bookmarks(): string {
+            return JSON.stringify(root.bookmarks || []);
+        }
+
+        function removeBookmark(indexStr: string): string {
+            var idx = parseInt(indexStr);
+            if (isNaN(idx) || idx < 0)
+                return "error: invalid index";
+            return root.removeBookmark(idx) ? "ok" : "error: could not remove bookmark";
+        }
+
+        function pickup(indexStr: string): string {
+            var idx = parseInt(indexStr);
+            if (isNaN(idx) || idx < 0)
+                return "error: invalid index";
+            return root.pickupBookmark(idx) ? "ok" : "error: could not pickup bookmark";
         }
 
         function seek(ms: string): string {

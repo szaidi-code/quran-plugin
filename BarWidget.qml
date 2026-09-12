@@ -91,7 +91,7 @@ BarWidget {
                 desc: "Ibn Kathir, Sa'di & Maarif-ul-Quran for " + sName,
                 icon: "📜",
                 badge: "Tafsir",
-                url: "https://quran.com/" + sNum + ":" + curAyah + "/tafsirs"
+                url: "https://quran.com/" + sNum + "/" + curAyah + "/tafsirs"
             },
             {
                 id: "word_by_word",
@@ -123,7 +123,7 @@ BarWidget {
                 desc: "Community reflections and study notes for " + sName,
                 icon: "💡",
                 badge: "Reflect",
-                url: "https://quran.com/" + sNum + "/reflections"
+                url: "https://quran.com/" + sNum + "/" + curAyah + "/reflections"
             },
             {
                 id: "reciters",
@@ -876,7 +876,7 @@ BarWidget {
                                         var s = root.currentSurah ? root.currentSurah.number : 1;
                                         var v = root.currentSurah ? (root.currentSurah.total_verses || root.currentSurah.totalVerses || 1) : 1;
                                         var a = Model.estimateAyah(v, seekBar.pos, seekBar.dur);
-                                        Qt.openUrlExternally("https://quran.com/" + s + ":" + a + "/tafsirs");
+                                        Qt.openUrlExternally("https://quran.com/" + s + "/" + a + "/tafsirs");
                                     }
                                 }
                             }

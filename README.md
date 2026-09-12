@@ -32,7 +32,7 @@ An elegant, feature-rich Quran recitation player and reader companion for the Om
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/saifomar/mus.quran.git --enable
+omarchy plugin add https://github.com/szaidi-code/quran-plugin.git --enable
 ```
 
 Then install the audio engine (downloads attested prebuilt binaries from

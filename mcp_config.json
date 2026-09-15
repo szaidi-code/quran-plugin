@@ -3,7 +3,7 @@
     "quran-companion": {
       "command": "python3",
       "args": [
-        "/home/szaidi/.config/omarchy/plugins/mus.quran/mcp/server.py"
+        "~/.config/omarchy/plugins/mus.quran/mcp/server.py"
       ]
     }
   }

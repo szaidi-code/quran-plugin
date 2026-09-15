@@ -17,7 +17,7 @@ set -euo pipefail
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 BUILD=0
 ARCH=""
-REPO="saifomar/mus.quran"
+REPO="${REPO:-szaidi-code/quran-plugin}"
 
 usage() {
   sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
@@ -74,8 +74,16 @@ else
       exit 1
     fi
 
-    TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+    TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 || true)
     if [[ -z "$TAG" ]]; then
+      if command -v go >/dev/null 2>&1; then
+        echo "install.sh: no release found, compiling from source..."
+        CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w" -o "$PREFIX/quranproxyd" ./cmd/quranproxyd
+        CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w" -o "$PREFIX/quranctl" ./cmd/quranctl
+        echo "install.sh: built quranproxyd + quranctl (linux/$ARCH) into $PREFIX"
+        echo "install.sh: restart your Omarchy shell (or re-enable the plugin) to load the engine."
+        exit 0
+      fi
       echo "install.sh: could not determine latest release tag" >&2
       exit 1
     fi

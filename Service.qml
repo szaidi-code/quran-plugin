@@ -1328,7 +1328,7 @@ Item {
         try {
             bookmarksFile.setText(JSON.stringify(root.bookmarks, null, 2));
         } catch (e) {
-            console.warn("mus.quran: failed to save bookmarks", e);
+            console.warn("szaidi.quran: failed to save bookmarks", e);
         }
     }
 
@@ -1611,7 +1611,7 @@ Item {
         mprisFindProc.running = true;
         // Resolve the audio-engine binaries first; _startProxy is a no-op until
         // they are found (or setupRequired is set).
-        toolProbeProc.command = ["bash", "-c", 'arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) arch="";; esac;' + ' plugin="$HOME/.config/omarchy/plugins/mus.quran/prebuilt/linux-$arch";' + ' for b in quranproxyd quranctl; do c="";' + '   [ -n "$arch" ] && [ -x "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -x "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   [ -n "$c" ] && echo "$b $c"; done'];
+        toolProbeProc.command = ["bash", "-c", 'arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) arch="";; esac;' + ' plugin="$HOME/.config/omarchy/plugins/szaidi.quran/prebuilt/linux-$arch";' + ' for b in quranproxyd quranctl; do c="";' + '   [ -n "$arch" ] && [ -x "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -x "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   [ -n "$c" ] && echo "$b $c"; done'];
         toolProbeProc.running = true;
     }
 

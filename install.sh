@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the mus.quran audio engine (quranproxyd daemon + quranctl CLI).
+# Install the szaidi.quran audio engine (quranproxyd daemon + quranctl CLI).
 #
 # Downloads attested prebuilt binaries from GitHub Releases by default.
 # Pass --build to compile locally instead.

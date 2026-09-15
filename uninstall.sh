@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Uninstall the mus.quran audio engine and all local mus.quran data.
+# Uninstall the szaidi.quran audio engine and all local szaidi.quran data.
 #
 # Removes:
 #   - quranproxyd + quranctl binaries installed by install.sh
@@ -76,5 +76,5 @@ for path in "${data_paths[@]}"; do
   fi
 done
 
-echo "uninstall.sh: mus.quran has been uninstalled."
+echo "uninstall.sh: szaidi.quran has been uninstalled."
 echo "uninstall.sh: restart your Omarchy shell (or disable/remove the plugin) to unload the engine."

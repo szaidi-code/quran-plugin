@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quran MCP Server for mus.quran and Omarchy Shell
+Quran MCP Server for szaidi.quran and Omarchy Shell
 Exposes Model Context Protocol (MCP) tools over stdio for AI assistants to:
 1. Track where the reader is (Surah, Ayah, Juz, Hizb, Page, audio position, progress %)
 2. Read Quran verses with personalized Arabic scripts (Uthmani, IndoPak) and translations

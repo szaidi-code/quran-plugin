@@ -31,7 +31,7 @@ prebuilt:
 dist: prebuilt
 	@rm -rf dist && mkdir -p dist
 	@for arch in $(ARCHS); do \
-	  tar -C prebuilt -czf dist/mus.quran-linux-$$arch.tar.gz linux-$$arch; \
+	  tar -C prebuilt -czf dist/szaidi.quran-linux-$$arch.tar.gz linux-$$arch; \
 	done
 	@cd dist && sha256sum *.tar.gz > SHA256SUMS
 	@ls -lh dist

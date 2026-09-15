@@ -52,7 +52,7 @@ Then restart your Omarchy shell.
 
 ## Uninstall
 
-To completely remove the mus.quran engine and its local data:
+To completely remove the szaidi.quran engine and its local data:
 
 ```sh
 ./uninstall.sh
@@ -66,7 +66,7 @@ uninstalling:
 ```
 
 The uninstall script removes the installed `quranproxyd` and `quranctl`
-binaries along with mus.quran's downloaded audio, cache, and settings.
+binaries along with szaidi.quran's downloaded audio, cache, and settings.
 
 No `sudo` is required.
 
@@ -128,7 +128,7 @@ omarchy-shell quran clearCache
 
 Special thanks to **AksharP5/omarchy-radio-atlas** for showing how to approach
 Omarchy plugin integration and serving as a useful reference while building
-mus.quran.
+szaidi.quran.
 
 ## License
 

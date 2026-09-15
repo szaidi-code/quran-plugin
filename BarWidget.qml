@@ -7,9 +7,9 @@ import "Model.js" as Model
 
 BarWidget {
     id: root
-    moduleName: "mus.quran"
+    moduleName: "szaidi.quran"
 
-    property var quranService: bar && bar.shell ? bar.shell.firstPartyServiceFor("mus.quran") : null
+    property var quranService: bar && bar.shell ? bar.shell.firstPartyServiceFor("szaidi.quran") : null
 
     // The service registers after this widget may instantiate (plugin load
     // order). firstPartyServiceFor is a plain object lookup with no change
@@ -21,7 +21,7 @@ BarWidget {
         running: !root.quranService
         onTriggered: {
             if (bar && bar.shell) {
-                var svc = bar.shell.firstPartyServiceFor("mus.quran");
+                var svc = bar.shell.firstPartyServiceFor("szaidi.quran");
                 if (svc)
                     root.quranService = svc;
             }

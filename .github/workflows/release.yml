@@ -26,27 +26,31 @@ jobs:
 
       - name: Build binaries
         run: |
-          mkdir -p dist/linux-${{ matrix.arch }}
+          mkdir -p build/linux-${{ matrix.arch }}
           for bin in quranproxyd quranctl; do
             CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} \
               go build -trimpath -ldflags="-s -w" \
-              -o dist/linux-${{ matrix.arch }}/$bin ./cmd/$bin
+              -o build/linux-${{ matrix.arch }}/$bin ./cmd/$bin
           done
 
-      - name: Generate checksums
-        working-directory: dist/linux-${{ matrix.arch }}
-        run: sha256sum quranproxyd quranctl > SHA256SUMS
+      # Package the exact layout install.sh expects: linux-<arch>/<binaries>.
+      - name: Package archive
+        run: |
+          mkdir -p dist
+          tar -czf dist/linux-${{ matrix.arch }}.tar.gz \
+            -C build linux-${{ matrix.arch }}
+          sha256sum dist/linux-${{ matrix.arch }}.tar.gz
 
-      - name: Attest binaries
+      # Provenance is bound to the archive that users actually download.
+      - name: Attest archive provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: dist/linux-${{ matrix.arch }}/quran*
-          push-to-registry: true
+          subject-path: dist/linux-${{ matrix.arch }}.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
-          path: dist/linux-${{ matrix.arch }}/
+          path: dist/linux-${{ matrix.arch }}.tar.gz
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -56,15 +60,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
+          merge-multiple: true
+
+      # Printed into the run log so the digests published in the release can be
+      # cross-checked against checksums/<tag>.sha256 committed in the tree.
+      - name: Publish digests to run log
+        run: sha256sum artifacts/linux-*.tar.gz
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/linux-amd64/quranproxyd
-            artifacts/linux-amd64/quranctl
-            artifacts/linux-amd64/SHA256SUMS
-            artifacts/linux-arm64/quranproxyd
-            artifacts/linux-arm64/quranctl
-            artifacts/linux-arm64/SHA256SUMS
+          files: artifacts/linux-*.tar.gz
           generate_release_notes: true

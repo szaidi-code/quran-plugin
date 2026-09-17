@@ -35,8 +35,10 @@ An elegant, feature-rich Quran recitation player and reader companion for the Om
 omarchy plugin add https://github.com/szaidi-code/quran-plugin.git --enable
 ```
 
-Then install the audio engine (downloads attested prebuilt binaries from
-GitHub Releases):
+Then install the audio engine. This downloads the archive for a pinned,
+immutable release tag and verifies it against SHA-256 digests committed in
+this repository (`checksums/<tag>.sha256`) before extracting it. Installation
+fails closed if those digests are missing or do not match:
 
 ```sh
 ./install.sh
@@ -68,7 +70,8 @@ uninstalling:
 The uninstall script removes the installed `quranproxyd` and `quranctl`
 binaries along with szaidi.quran's downloaded audio, cache, and settings.
 
-No `sudo` is required.
+The plugin installs entirely within your own user account; elevated
+privileges are never requested or used.
 
 After uninstalling, restart your Omarchy shell or disable/remove the plugin
 to unload the running engine.
@@ -86,8 +89,24 @@ make test           # Go unit tests
 The Go module has **zero external dependencies** (`go.mod` has no `require`
 block), so builds work offline.
 
-Prebuilt binaries are built and attested via GitHub Actions on each push to
-`main` and on version tags. See [`.github/workflows/release.yml`](.github/workflows/release.yml).
+Release archives are built and attested via GitHub Actions on version tags.
+See [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+### Verifying a download
+
+`install.sh` performs both checks below automatically, refusing to install on
+any mismatch. To verify by hand:
+
+```sh
+# 1. Digest committed in this tree (the fail-closed gate)
+sha256sum -c <(grep linux-amd64.tar.gz checksums/v1.1.2.sha256)
+
+# 2. GitHub build provenance, bound to this repository
+gh attestation verify linux-amd64.tar.gz --repo szaidi-code/quran-plugin
+```
+
+The digests live in the source tree rather than inside the release archive, so
+they are not supplied by the artifact being verified.
 
 ## Security
 
@@ -104,8 +123,11 @@ This plugin was written with the security model of the Omarchy shell in mind
 * Media is validated (size cap, MIME, ffprobe) before a file is accepted as a
   permanent download; downloads stage through unique temp files and atomic
   renames.
-* No sudo, no install hooks, no writes outside your own state/cache/runtime
-  dirs.
+* No elevated privileges, no install hooks, no writes outside your own
+  state/cache/runtime dirs.
+* Release archives are pinned to an immutable tag and verified against digests
+  committed in this tree before extraction; the installer fails closed when
+  integrity metadata is missing or mismatched.
 
 ## Usage
 

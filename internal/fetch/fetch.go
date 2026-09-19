@@ -140,8 +140,25 @@ func Fetch(ctx context.Context, o Options) error {
 	case http.StatusPartialContent:
 		start = partSize
 	default:
-		io.Copy(io.Discard, resp.Body)
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 		return fmt.Errorf("fetch: origin returned status %d", resp.StatusCode)
+	}
+
+	expectedRemaining := remote - start
+	if expectedRemaining <= 0 {
+		return fmt.Errorf("fetch: invalid expected remaining bytes (%d)", expectedRemaining)
+	}
+
+	// Validate Content-Length if reported on GET.
+	if resp.ContentLength > 0 {
+		if resp.ContentLength > max || start+resp.ContentLength > max {
+			return fmt.Errorf("fetch: origin get content-length %d exceeds cap %d", resp.ContentLength, max)
+		}
+		if resp.ContentLength != expectedRemaining {
+			return fmt.Errorf("fetch: origin get content-length mismatch (got %d, want %d)", resp.ContentLength, expectedRemaining)
+		}
+	} else if resp.ContentLength == 0 {
+		return fmt.Errorf("fetch: origin get returned empty body")
 	}
 
 	tmp, err := os.CreateTemp(recDir, fmt.Sprintf("%d.mp3.part.", o.Surah))
@@ -166,13 +183,14 @@ func Fetch(ctx context.Context, o Options) error {
 		if err != nil {
 			return fmt.Errorf("fetch: open partial: %w", err)
 		}
-		if _, err := io.Copy(tmp, pf); err != nil {
+		if _, err := io.Copy(tmp, io.LimitReader(pf, remote)); err != nil {
 			pf.Close()
 			return fmt.Errorf("fetch: seed partial: %w", err)
 		}
 		pf.Close()
 	}
 
+	br := &boundedReader{r: resp.Body, budget: expectedRemaining}
 	buf := make([]byte, writeBuf)
 	var written int64 = start
 	lastEmit := time.Now()
@@ -180,8 +198,11 @@ func Fetch(ctx context.Context, o Options) error {
 		o.OnProgress(start, remote)
 	}
 	for {
-		nr, rerr := resp.Body.Read(buf)
+		nr, rerr := br.Read(buf)
 		if nr > 0 {
+			if written+int64(nr) > remote || written+int64(nr) > max {
+				return fmt.Errorf("fetch: stream exceeded size limit (advertised %d, max %d)", remote, max)
+			}
 			if _, werr := tmp.Write(buf[:nr]); werr != nil {
 				return fmt.Errorf("fetch: write: %w", werr)
 			}
@@ -241,7 +262,7 @@ func probe(cl *http.Client, buildURL func(n int) (string, error), n int, max int
 	if err != nil {
 		return 0, "", fmt.Errorf("fetch: head: %w", err)
 	}
-	io.Copy(io.Discard, resp.Body)
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return 0, "", fmt.Errorf("fetch: origin head status %d", resp.StatusCode)
@@ -282,4 +303,38 @@ func resolveReciterDir(destRoot, reciter string) (string, error) {
 		return "", errors.New("fetch: reciter directory escapes destination root")
 	}
 	return recDir, nil
+}
+
+// boundedReader wraps an io.Reader and enforces a strict byte budget while
+// streaming. Reads are bounded to the remaining budget so a rogue server can
+// never deliver an unbounded chunk. When the budget is exhausted, any attempt
+// by the origin to stream additional (trailing) bytes causes an immediate abort.
+type boundedReader struct {
+	r      io.Reader
+	budget int64
+}
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if b.budget <= 0 {
+		var extra [1]byte
+		n, err := b.r.Read(extra[:])
+		if n > 0 {
+			return 0, fmt.Errorf("fetch: origin sent trailing bytes beyond advertised size")
+		}
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		return 0, io.EOF
+	}
+
+	toRead := p
+	if int64(len(toRead)) > b.budget {
+		toRead = toRead[:b.budget]
+	}
+	n, err := b.r.Read(toRead)
+	b.budget -= int64(n)
+	return n, err
 }

@@ -279,3 +279,128 @@ func TestFetchProgress(t *testing.T) {
 		t.Fatalf("final progress = %d/%d, want %d/%d", lastWritten, lastTotal, len(body), len(body))
 	}
 }
+
+func TestFetchRejectsStreamExceedingAdvertised(t *testing.T) {
+	advertised := []byte("0123456789abcdef")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(advertised)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Stream advertised bytes followed by extra bytes using Flusher (chunked)
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			w.Write(advertised)
+			flusher.Flush()
+			w.Write([]byte("EXTRA_PAYLOAD_EXCEEDING_BUDGET"))
+			flusher.Flush()
+			return
+		}
+		w.Write(append(advertised, []byte("EXTRA_PAYLOAD_EXCEEDING_BUDGET")...))
+	}))
+	defer srv.Close()
+
+	opts := Options{
+		Client:   dialer.NoRedirectClient(),
+		DestRoot: t.TempDir(),
+		Reciter:  "ar.alafasy",
+		Surah:    1,
+		URL: func(n int) (string, error) {
+			return srv.URL + "/audio/1.mp3", nil
+		},
+	}
+
+	err := Fetch(context.Background(), opts)
+	if err == nil {
+		t.Fatal("Fetch must fail when stream exceeds advertised size")
+	}
+	if !strings.Contains(err.Error(), "trailing") && !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	// Verify target was not created
+	target := filepath.Join(opts.DestRoot, "ar.alafasy", "1.mp3")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target must not exist after stream violation")
+	}
+
+	// Verify staging file was cleaned up on failure
+	matches, _ := filepath.Glob(filepath.Join(opts.DestRoot, "ar.alafasy", "1.mp3.part*"))
+	if len(matches) != 0 {
+		t.Fatalf("staging files left behind: %v", matches)
+	}
+}
+
+func TestFetchRejectsGetContentLengthMismatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "16")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// In GET, send a mismatched Content-Length header
+		w.Header().Set("Content-Length", "32")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("0123456789abcdef0123456789abcdef"))
+	}))
+	defer srv.Close()
+
+	opts := Options{
+		Client:   dialer.NoRedirectClient(),
+		DestRoot: t.TempDir(),
+		Reciter:  "ar.alafasy",
+		Surah:    1,
+		URL: func(n int) (string, error) {
+			return srv.URL + "/audio/1.mp3", nil
+		},
+	}
+
+	err := Fetch(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "content-length mismatch") {
+		t.Fatalf("Fetch = %v, want content-length mismatch", err)
+	}
+
+	matches, _ := filepath.Glob(filepath.Join(opts.DestRoot, "ar.alafasy", "1.mp3.part*"))
+	if len(matches) != 0 {
+		t.Fatalf("staging files left behind: %v", matches)
+	}
+}
+
+func TestFetchRejectsGetContentLengthExceedsCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "16")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Length", "500000000")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	opts := Options{
+		Client:   dialer.NoRedirectClient(),
+		DestRoot: t.TempDir(),
+		Reciter:  "ar.alafasy",
+		Surah:    1,
+		MaxBytes: 100,
+		URL: func(n int) (string, error) {
+			return srv.URL + "/audio/1.mp3", nil
+		},
+	}
+
+	err := Fetch(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("Fetch = %v, want exceeds cap", err)
+	}
+
+	matches, _ := filepath.Glob(filepath.Join(opts.DestRoot, "ar.alafasy", "1.mp3.part*"))
+	if len(matches) != 0 {
+		t.Fatalf("staging files left behind: %v", matches)
+	}
+}

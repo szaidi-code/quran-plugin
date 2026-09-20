@@ -20,6 +20,12 @@ set -euo pipefail
 readonly REPO="szaidi-code/quran-plugin"
 readonly PINNED_TAG="v1.1.2"
 
+# Network & transfer safety bounds for binary release downloads.
+# Release archives are ~4.6 MiB (amd64) and ~4.2 MiB (arm64); cap at 16 MiB.
+readonly CONNECT_TIMEOUT=15          # seconds to establish TCP connection
+readonly MAX_DOWNLOAD_TIME=120       # maximum seconds for complete download
+readonly MAX_ARCHIVE_BYTES=16777216  # 16 MiB producer-side budget cap
+
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 BUILD=0
 ARCH=""
@@ -97,13 +103,38 @@ else
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
 
+  ARCHIVE_PATH="$TMP/$ARCHIVE"
   URL="https://github.com/$REPO/releases/download/$PINNED_TAG/$ARCHIVE"
   echo "install.sh: downloading $PINNED_TAG for linux/$ARCH..."
-  curl -fsSL "$URL" -o "$TMP/$ARCHIVE" || die "download failed: $URL"
+
+  # Download with explicit connect/overall timeouts and strict size cap.
+  # Fail closed and clean up partial files immediately if the server hangs, aborts,
+  # or attempts to stream beyond the maximum allowed archive size.
+  if ! curl -fsSL \
+      --connect-timeout "$CONNECT_TIMEOUT" \
+      --max-time "$MAX_DOWNLOAD_TIME" \
+      --max-filesize "$MAX_ARCHIVE_BYTES" \
+      "$URL" -o "$ARCHIVE_PATH"; then
+    rm -f "$ARCHIVE_PATH"
+    die "download failed, timed out, or exceeded maximum size limit ($MAX_ARCHIVE_BYTES bytes): $URL"
+  fi
+
+  # Strictly enforce maximum archive size and reject/delete oversized partials before hashing.
+  [[ -f "$ARCHIVE_PATH" ]] || die "downloaded archive is missing: $ARCHIVE_PATH"
+  ARCHIVE_SIZE="$(wc -c < "$ARCHIVE_PATH" | tr -d ' ')"
+  if (( ARCHIVE_SIZE == 0 )); then
+    rm -f "$ARCHIVE_PATH"
+    die "downloaded archive is empty"
+  fi
+  if (( ARCHIVE_SIZE > MAX_ARCHIVE_BYTES )); then
+    rm -f "$ARCHIVE_PATH"
+    die "downloaded archive exceeds maximum allowed size ($ARCHIVE_SIZE > $MAX_ARCHIVE_BYTES bytes); deleted partial file"
+  fi
 
   # Verify the archive BEFORE extracting anything from it.
-  ACTUAL="$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')"
+  ACTUAL="$(sha256sum "$ARCHIVE_PATH" | awk '{print $1}')"
   if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+    rm -f "$ARCHIVE_PATH"
     die "checksum mismatch for $ARCHIVE
     expected: $EXPECTED
     actual:   $ACTUAL
@@ -113,7 +144,7 @@ else
 
   # Defence in depth: confirm GitHub build provenance when gh is available.
   if command -v gh >/dev/null 2>&1; then
-    if gh attestation verify "$TMP/$ARCHIVE" --repo "$REPO" >/dev/null 2>&1; then
+    if gh attestation verify "$ARCHIVE_PATH" --repo "$REPO" >/dev/null 2>&1; then
       echo "install.sh: verified build provenance attestation"
     else
       echo "install.sh: note: could not verify provenance attestation (gh offline or unauthenticated);" >&2
@@ -121,7 +152,7 @@ else
     fi
   fi
 
-  tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
+  tar -xzf "$ARCHIVE_PATH" -C "$TMP"
   for bin in quranproxyd quranctl; do
     [[ -f "$TMP/linux-$ARCH/$bin" ]] || die "archive is missing $bin (refusing to install)"
   done

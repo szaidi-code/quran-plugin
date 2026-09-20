@@ -125,9 +125,10 @@ This plugin was written with the security model of the Omarchy shell in mind
   renames.
 * No elevated privileges, no install hooks, no writes outside your own
   state/cache/runtime dirs.
-* Release archives are pinned to an immutable tag and verified against digests
-  committed in this tree before extraction; the installer fails closed when
-  integrity metadata is missing or mismatched.
+* Release archives are pinned to an immutable tag, downloaded within strict
+  producer-side size and timeout bounds, and verified against digests committed
+  in this tree before extraction; the installer fails closed when integrity
+  metadata is missing, mismatched, or oversized.
 
 ## Usage
 

@@ -468,42 +468,259 @@ function reciterDisplayLabel(reciter, language) {
 }
 
 // --- filtering ------------------------------------------------------------
+//
+// Surah and reciter search is diacritic-, punctuation- and article-insensitive
+// ("ya sin", "yaseen", "Ya-Sin", "يس", "36", "surah 36", "36:5", "juz 30",
+// "page 293" all find Ya-Sin), and results are ranked: exact hits first, then
+// prefix matches, then substrings.
+
+var ARABIC_DIACRITICS_RE = /[ؐ-ًؚ-ٰٟۖ-ۭـ]/g
+var SEARCH_PUNCT_RE = /[‘’'`ʿʾ\-‐-―._,()\[\]!?]/g
+
+// Lowercase, strip Arabic tashkeel/tatweel and Latin accents, fold common
+// Arabic letter variants, drop punctuation, collapse whitespace.
+function normalizeSearchText(s) {
+  var t = String(s || "").toLowerCase()
+  t = t.replace(ARABIC_DIACRITICS_RE, "")
+  t = t.replace(/[أإآٱ]/g, "ا")  // أ إ آ ٱ -> ا
+    .replace(/ى/g, "ي")                        // ى -> ي
+    .replace(/ة/g, "ه")                        // ة -> ه
+    .replace(/ؤ/g, "و")                        // ؤ -> و
+    .replace(/ئ/g, "ي")                        // ئ -> ي
+  t = t.replace(/[àáâãäå]/g, "a").replace(/[èéêë]/g, "e").replace(/[ìíîï]/g, "i")
+    .replace(/[òóôõö]/g, "o").replace(/[ùúûü]/g, "u").replace(/ç/g, "c").replace(/ñ/g, "n")
+    .replace(/[şś]/g, "s").replace(/ğ/g, "g").replace(/ı/g, "i")
+  t = t.replace(SEARCH_PUNCT_RE, "")
+  return t.replace(/\s+/g, " ").trim()
+}
+
+// Compact form: no spaces at all, so "al fatiha" and "Al-Fatihah" compare equal.
+function compactSearchText(s) {
+  return normalizeSearchText(s).replace(/ /g, "")
+}
+
+// Strip a leading Arabic definite article from a compacted transliteration
+// ("alfatihah" -> "fatihah", "annisa" -> "nisa", "ashshams" -> "shams").
+var ARTICLE_RE = /^(al|an|ar|as|ash|at|ad|az|ath|adh|ad|ar)/
+function stripArticle(compact) {
+  var m = ARTICLE_RE.exec(compact)
+  if (m && compact.length > m[0].length + 1) return compact.substring(m[0].length)
+  return compact
+}
+
+// Common alternative spellings and English nicknames, keyed by surah number.
+var SURAH_ALIASES = {
+  1: ["fatiha", "fateha", "alhamd", "opening"], 2: ["baqara", "bakara", "cow"],
+  3: ["imran", "ali imran", "aal imran"], 4: ["nisa", "women"], 5: ["maida", "maidah", "table"],
+  6: ["anam", "cattle"], 7: ["araf", "heights"], 8: ["anfal", "spoils"], 9: ["tawba", "taubah", "tauba", "baraah", "repentance"],
+  10: ["yunus", "jonah"], 11: ["hud"], 12: ["yusuf", "joseph"], 13: ["rad", "raad", "thunder"],
+  14: ["ibrahim", "abraham"], 15: ["hijr"], 16: ["nahl", "bee"], 17: ["isra", "israa", "bani israil", "night journey"],
+  18: ["kahf", "cave"], 19: ["maryam", "mary"], 20: ["taha", "ta ha"], 21: ["anbiya", "prophets"],
+  22: ["hajj", "pilgrimage"], 23: ["muminun", "mu'minun", "believers"], 24: ["nur", "noor", "light"],
+  25: ["furqan", "criterion"], 26: ["shuara", "poets"], 27: ["naml", "ant"], 28: ["qasas", "stories"],
+  29: ["ankabut", "spider"], 30: ["rum", "romans"], 31: ["luqman"], 32: ["sajda", "sajdah", "prostration"],
+  33: ["ahzab", "confederates"], 34: ["saba", "sheba"], 35: ["fatir", "originator"], 36: ["yasin", "yaseen", "ya sin", "ya seen"],
+  37: ["saffat"], 38: ["sad", "saad"], 39: ["zumar", "troops"], 40: ["ghafir", "mumin", "forgiver"],
+  41: ["fussilat", "ha mim sajda"], 42: ["shura", "consultation"], 43: ["zukhruf", "ornaments"], 44: ["dukhan", "smoke"],
+  45: ["jathiya", "kneeling"], 46: ["ahqaf"], 47: ["muhammad"], 48: ["fath", "victory"], 49: ["hujurat", "rooms"],
+  50: ["qaf"], 51: ["dhariyat", "zariyat"], 52: ["tur", "mount"], 53: ["najm", "star"], 54: ["qamar", "moon"],
+  55: ["rahman", "rahmaan", "merciful"], 56: ["waqia", "waqiah", "inevitable"], 57: ["hadid", "iron"], 58: ["mujadila"],
+  59: ["hashr", "exile"], 60: ["mumtahana"], 61: ["saff", "ranks"], 62: ["jumua", "jumuah", "juma", "friday"],
+  63: ["munafiqun", "hypocrites"], 64: ["taghabun"], 65: ["talaq", "divorce"], 66: ["tahrim"], 67: ["mulk", "kingdom", "sovereignty"],
+  68: ["qalam", "pen"], 69: ["haqqa", "haqqah"], 70: ["maarij"], 71: ["nuh", "noah"], 72: ["jinn"],
+  73: ["muzzammil", "muzammil"], 74: ["muddathir", "mudathir"], 75: ["qiyama", "qiyamah", "resurrection"], 76: ["insan", "dahr", "man"],
+  77: ["mursalat"], 78: ["naba", "nabaa"], 79: ["naziat"], 80: ["abasa"], 81: ["takwir"], 82: ["infitar"],
+  83: ["mutaffifin"], 84: ["inshiqaq"], 85: ["buruj"], 86: ["tariq"], 87: ["ala", "a'la"], 88: ["ghashiya"],
+  89: ["fajr", "dawn"], 90: ["balad", "city"], 91: ["shams", "sun"], 92: ["layl", "lail", "night"], 93: ["duha", "dhuha"],
+  94: ["sharh", "inshirah", "alam nashrah"], 95: ["tin", "fig"], 96: ["alaq", "iqra", "clot"], 97: ["qadr", "power"],
+  98: ["bayyina"], 99: ["zalzala", "zilzal", "earthquake"], 100: ["adiyat"], 101: ["qaria", "qariah"], 102: ["takathur"],
+  103: ["asr", "time"], 104: ["humaza"], 105: ["fil", "elephant"], 106: ["quraysh", "quraish"], 107: ["maun"],
+  108: ["kawthar", "kauthar"], 109: ["kafirun", "kafiroon"], 110: ["nasr"], 111: ["masad", "lahab"], 112: ["ikhlas"],
+  113: ["falaq"], 114: ["nas", "naas", "mankind"]
+}
+
+// "2:255", "2.255", "2/255" -> { surah: 2, ayah: 255 }; otherwise null.
+function parseVerseKey(query) {
+  var m = /^\s*(\d{1,3})\s*[:.\/]\s*(\d{1,3})\s*$/.exec(String(query || ""))
+  if (!m) return null
+  var s = parseInt(m[1], 10), a = parseInt(m[2], 10)
+  if (s < 1 || s > 114 || a < 1) return null
+  return { surah: s, ayah: a }
+}
+function isVerseKeyQuery(query) { return parseVerseKey(query) !== null }
+
+// "juz 30", "para 30", "page 293", "p293", "hizb 12" -> { kind, val }; else null.
+function parseSpanQuery(query) {
+  var m = /^\s*(juz|juzz|para|page|pg|p|hizb|جزء|صفحة|حزب)\s*\.?\s*(\d{1,3})\s*$/i.exec(String(query || ""))
+  if (!m) return null
+  var word = m[1].toLowerCase(), n = parseInt(m[2], 10)
+  var kind = (word === "juz" || word === "juzz" || word === "para" || word === "جزء") ? "juz"
+    : (word === "hizb" || word === "حزب") ? "hizb" : "page"
+  var max = kind === "juz" ? 30 : (kind === "hizb" ? 60 : 604)
+  if (n < 1 || n > max) return null
+  return { kind: kind, val: n }
+}
+function isSpanQuery(query) { return parseSpanQuery(query) !== null }
+
+// "36", "surah 36", "sura 36", "سورة 36" -> 36; else null.
+function parseSurahNumberQuery(query) {
+  var m = /^\s*(?:surah|sura|surat|s|سورة|سوره)?\s*(\d{1,3})\s*$/i.exec(String(query || ""))
+  if (!m) return null
+  var n = parseInt(m[1], 10)
+  return n >= 1 && n <= 114 ? n : null
+}
+
+// First Madinah-mushaf page of each juz (index 1..30).
+var JUZ_START_PAGE = [0, 1, 22, 42, 62, 82, 102, 121, 142, 162, 182, 201, 222, 242, 262, 282,
+  302, 322, 342, 362, 382, 402, 422, 442, 462, 482, 502, 522, 542, 562, 582]
+
+// Whether surah `num` has any text inside juz `juz`. A surah runs from its
+// start juz up to where the next surah begins; if the next surah begins on
+// the very first page of `juz`, this surah ended in the previous juz.
+function surahInJuz(num, juz) {
+  var start = getSurahJuz(num)
+  if (juz < start) return false
+  if (num >= 114) return true
+  var nextJuz = getSurahJuz(num + 1)
+  if (juz < nextJuz) return true
+  if (juz > nextJuz) return false
+  return getSurahPage(num + 1) > (JUZ_START_PAGE[juz] || 0)
+}
+function surahOnPage(num, page) {
+  var start = getSurahPage(num)
+  var end = num < 114 ? getSurahPage(num + 1) : 604
+  return page >= start && page <= end
+}
+
+// Rank of `surah` for `query`; lower is better, -1 means no match.
+function surahScore(surah, query) {
+  var raw = String(query || "")
+  if (raw.trim() === "") return 0
+  var vk = parseVerseKey(raw)
+  if (vk) return vk.surah === surah.number ? 0 : -1
+  var span = parseSpanQuery(raw)
+  if (span) {
+    if (span.kind === "juz") return surahInJuz(surah.number, span.val) ? 0 : -1
+    if (span.kind === "page") return surahOnPage(surah.number, span.val) ? 0 : -1
+    return -1 // hizb jumps resolve through the semantic search only
+  }
+  var num = parseSurahNumberQuery(raw)
+  if (num !== null) {
+    if (num === surah.number) return 0
+    // Bare digits also prefix-match while the user is still typing ("3" -> 30-39).
+    if (/^\s*\d+\s*$/.test(raw) && String(surah.number).indexOf(raw.trim()) === 0) return 3
+    return -1
+  }
+
+  var q = compactSearchText(raw)
+  if (q === "") return 0
+  var qNoArticle = stripArticle(q)
+  var best = -1
+  function consider(score) { if (score >= 0 && (best < 0 || score < best)) best = score }
+
+  var translit = compactSearchText(surah.transliteration)
+  var arabic = compactSearchText(surah.name)
+  var primary = [translit, stripArticle(translit), arabic, stripArticle(arabic)]
+  for (var i = 0; i < primary.length; i++) {
+    var f = primary[i]
+    if (!f) continue
+    if (f === q || f === qNoArticle) consider(0)
+    else if (f.indexOf(q) === 0 || f.indexOf(qNoArticle) === 0) consider(1)
+    else if (f.indexOf(q) !== -1) consider(3)
+  }
+
+  var aliases = SURAH_ALIASES[surah.number] || []
+  for (var a = 0; a < aliases.length; a++) {
+    var al = compactSearchText(aliases[a])
+    if (al === q || al === qNoArticle) consider(0)
+    else if (al.indexOf(q) === 0 || al.indexOf(qNoArticle) === 0) consider(2)
+    else if (q.length >= 3 && al.indexOf(q) !== -1) consider(3)
+  }
+
+  var tr_ = surah.translations || {}
+  for (var l = 0; l < LANGUAGES.length; l++) {
+    var t = compactSearchText(tr_[LANGUAGES[l].value] || "")
+    if (!t) continue
+    if (t === q) consider(1)
+    else if (t.indexOf(q) === 0) consider(2)
+    else if (t.indexOf(q) !== -1) consider(3)
+  }
+
+  var type = normalizeSearchText(surah.type)
+  if (type && (type === normalizeSearchText(raw) || (q.length >= 3 && type.indexOf(q) === 0))) consider(2)
+  return best
+}
 
 function surahMatches(surah, query) {
-  if (!query) return true
-  var q = query.toLowerCase()
-  var fields = [surah.transliteration, surah.name]
-  var tr_ = surah.translations || {}
-  for (var i = 0; i < LANGUAGES.length; i++) {
-    fields.push(tr_[LANGUAGES[i].value] || "")
+  return surahScore(surah, query) >= 0
+}
+
+// Rank of `reciter` for `query`; lower is better, -1 means no match. Every
+// whitespace-separated token must appear somewhere in the reciter's English
+// name, Arabic name, or identifier, in any order ("alafasy mishary" works).
+function reciterScore(reciter, query) {
+  var qn = normalizeSearchText(query)
+  if (qn === "") return 0
+  var en = normalizeSearchText(reciter.englishName)
+  var ar = normalizeSearchText(reciter.name)
+  var id = normalizeSearchText(reciter.identifier)
+  var hay = en + " " + ar + " " + id
+  var hayCompact = hay.replace(/ /g, "")
+  var tokens = qn.split(" ")
+  for (var i = 0; i < tokens.length; i++) {
+    if (hay.indexOf(tokens[i]) === -1 && hayCompact.indexOf(tokens[i]) === -1) return -1
   }
-  for (var j = 0; j < fields.length; j++) {
-    if (fields[j] && fields[j].toLowerCase().indexOf(q) !== -1) return true
+  if (en === qn || ar === qn) return 0
+  if (en.indexOf(qn) === 0 || ar.indexOf(qn) === 0) return 1
+  var words = (en + " " + ar).split(" ")
+  for (var w = 0; w < words.length; w++) {
+    if (words[w].indexOf(tokens[0]) === 0) return 2
   }
-  return false
+  return 3
 }
 
 function reciterMatches(reciter, query) {
-  if (!query) return true
-  var q = query.toLowerCase()
-  return (reciter.name && reciter.name.toLowerCase().indexOf(q) !== -1)
-    || (reciter.englishName && reciter.englishName.toLowerCase().indexOf(q) !== -1)
+  return reciterScore(reciter, query) >= 0
+}
+
+function _rankedFilter(items, query, scoreFn) {
+  var out = []
+  for (var i = 0; i < items.length; i++) {
+    var sc = scoreFn(items[i], query)
+    if (sc >= 0) out.push({ item: items[i], score: sc, idx: i })
+  }
+  out.sort(function(a, b) { return a.score - b.score || a.idx - b.idx })
+  var res = []
+  for (var j = 0; j < out.length; j++) res.push(out[j].item)
+  return res
 }
 
 function filterSurahs(surahs, query) {
-  var out = []
-  for (var i = 0; i < surahs.length; i++) {
-    if (surahMatches(surahs[i], query)) out.push(surahs[i])
-  }
-  return out
+  if (!surahs) return []
+  if (!query || String(query).trim() === "") return surahs.slice()
+  return _rankedFilter(surahs, query, surahScore)
 }
 
 function filterReciters(reciters, query) {
-  var out = []
-  for (var i = 0; i < reciters.length; i++) {
-    if (reciterMatches(reciters[i], query)) out.push(reciters[i])
+  if (!reciters) return []
+  if (!query || String(query).trim() === "") return reciters.slice()
+  return _rankedFilter(reciters, query, reciterScore)
+}
+
+function indexOfSurah(list, number) {
+  if (!list) return -1
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].number === number) return i
   }
-  return out
+  return -1
+}
+
+function indexOfReciter(list, identifier) {
+  if (!list) return -1
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].identifier === identifier) return i
+  }
+  return -1
 }
 
 // --- URL safety (catalog SSRF hardening) ----------------------------------

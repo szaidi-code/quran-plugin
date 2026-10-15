@@ -272,5 +272,68 @@ ok("localAudioUrl: bad reciter rejected", M.localAudioUrl("/data", "../etc", 1) 
 ok("localAudioUrl: bad surah rejected", M.localAudioUrl("/data", "ar.alafasy", 115) === "");
 ok("MAX_SURAH_BYTES is 314572800", M.MAX_SURAH_BYTES === 314572800);
 
+// ---------------------------------------------------------------------------
+// Surah / reciter search: normalization, aliases, numbers, verse keys, spans, ranking
+// ---------------------------------------------------------------------------
+const SURAHS_SRC = fs.readFileSync(path.join(__dirname, "..", "SurahNames.js"), "utf8");
+const SURAH_SANDBOX = { console };
+vm.createContext(SURAH_SANDBOX);
+vm.runInContext(SURAHS_SRC.split("\n").filter((l) => l.trim() !== ".pragma library").join("\n"), SURAH_SANDBOX, { filename: "SurahNames.js" });
+const SURAHS = SURAH_SANDBOX.SURAHS;
+const nums = (q) => M.filterSurahs(SURAHS, q).map((s) => s.number);
+const first = (q) => nums(q)[0];
+
+ok("search: 114 surahs loaded", SURAHS.length === 114);
+ok("search: empty query returns all", nums("").length === 114);
+ok("search: whitespace query returns all", nums("   ").length === 114);
+ok("search: normalize strips diacritics/punct", M.normalizeSearchText("Al-Fâtihah's") === "alfatihahs");
+ok("search: normalize folds arabic variants", M.normalizeSearchText("ٱلْبَقَرَة") === "البقره");
+ok("search: transliteration substring", first("fatih") === 1);
+ok("search: without article", first("fatiha") === 1);
+ok("search: with spaced article", first("al fatiha") === 1);
+ok("search: ya sin with space", first("ya sin") === 36);
+ok("search: yaseen alias", first("yaseen") === 36);
+ok("search: Ya-Sin hyphen", first("Ya-Sin") === 36);
+ok("search: arabic name", first("يس") === 36);
+ok("search: arabic without diacritics/article", first("بقرة") === 2);
+ok("search: english translation", first("the cow") === 2);
+ok("search: nickname kahf", first("kahf") === 18);
+ok("search: exact number", first("36") === 36);
+ok("search: number prefix also listed", nums("3").indexOf(30) !== -1 && first("3") === 3);
+ok("search: surah prefix", first("surah 67") === 67 && nums("surah 67").length === 1);
+ok("search: verse key", first("2:255") === 2 && nums("2:255").length === 1);
+ok("search: verse key dot", first("18.10") === 18);
+ok("search: juz 30 starts at naba", nums("juz 30")[0] === 78 && nums("juz 30").indexOf(114) !== -1);
+ok("search: juz 1 contains fatiha and baqara only", nums("juz 1").join(",") === "1,2");
+ok("search: page 293 is kahf", nums("page 293").indexOf(18) !== -1);
+ok("search: hizb handled by semantic only", nums("hizb 12").length === 0);
+ok("search: meccan type", nums("meccan").length > 80 && nums("meccan").indexOf(2) === -1);
+ok("search: garbage finds nothing", nums("zzzzqq").length === 0);
+ok("search: exact beats prefix (nas before nasr)", first("nas") === 114);
+ok("search: mulk ranks first for 'mulk'", first("mulk") === 67);
+ok("search: ranking keeps rahman first", first("rahman") === 55);
+ok("search: isVerseKeyQuery", M.isVerseKeyQuery("2:255") && !M.isVerseKeyQuery("2:") && !M.isVerseKeyQuery("juz 2"));
+ok("search: isSpanQuery", M.isSpanQuery("juz 30") && M.isSpanQuery("Page 50") && M.isSpanQuery("hizb 1") && !M.isSpanQuery("juz 31") && !M.isSpanQuery("mercy"));
+ok("search: parseSurahNumberQuery", M.parseSurahNumberQuery("sura 12") === 12 && M.parseSurahNumberQuery("115") === null && M.parseSurahNumberQuery("12:3") === null);
+ok("search: indexOfSurah", M.indexOfSurah(SURAHS, 36) === 35 && M.indexOfSurah(SURAHS, 999) === -1);
+
+const RECITERS = [
+  { identifier: "mp3quran_1", name: "إبراهيم الأخضر", englishName: "Ibrahim Al-Akdar" },
+  { identifier: "ar.alafasy", name: "مشاري راشد العفاسي", englishName: "Mishary Alafasi" },
+  { identifier: "mp3quran_5", name: "عبد الباسط عبد الصمد", englishName: "Abdul Basit Abdul Samad" },
+  { identifier: "mp3quran_9", name: "ماهر المعيقلي", englishName: "Maher Al Meaqli" },
+];
+const rids = (q) => M.filterReciters(RECITERS, q).map((r) => r.identifier);
+ok("reciter: empty returns all", rids("").length === 4);
+ok("reciter: english substring", rids("afasi").join() === "ar.alafasy");
+ok("reciter: case/punct insensitive", rids("al-akdar").join() === "mp3quran_1");
+ok("reciter: tokens any order", rids("alafasi mishary").join() === "ar.alafasy");
+ok("reciter: arabic name", rids("العفاسي").join() === "ar.alafasy");
+ok("reciter: arabic without diacritics prefix", rids("عبد").join() === "mp3quran_5");
+ok("reciter: identifier", rids("mp3quran_9").join() === "mp3quran_9");
+ok("reciter: no match", rids("xyz").length === 0);
+ok("reciter: prefix ranks before substring", rids("ma")[0] === "mp3quran_9");
+ok("reciter: indexOfReciter", M.indexOfReciter(RECITERS, "ar.alafasy") === 1 && M.indexOfReciter(RECITERS, "nope") === -1);
+
 console.log("\nmodel.js: " + pass + " passed, " + fail + " failed");
 process.exit(fail === 0 ? 0 : 1);

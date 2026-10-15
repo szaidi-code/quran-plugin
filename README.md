@@ -20,7 +20,23 @@ An elegant, feature-rich Quran recitation player and reader companion for the Om
 * **Quran.com Explore Suite**: Direct one-click access to the current Ayah on Quran.com, Ibn Kathir/Sa'di Tafsir, word-by-word morphology/grammar, Madinah Mushaf layout, and the personalized reading experience guide.
 * **Model Context Protocol (MCP) Server**: Built-in Python MCP server (`mcp/server.py`) plus native Go Streamable HTTP client (`cmd/quranctl/mcp.go`) connected to Quran Foundation's `https://mcp.quran.ai`.
 * **Instant Streaming & Offline Audio**: Fast byte-range streaming via a hardened loopback Go audio proxy (`quranproxyd`) with deep media validation and background full-mushaf caching.
-* **Multilingual Search**: Live instant search across 114 Surahs and reciters in Arabic, English, and 9 additional languages.
+* **Multilingual, Forgiving Search**: Instant ranked search across 114 Surahs and 240+ reciters. Spelling, diacritics, hyphens and the "Al-" article don't matter: `yaseen`, `ya sin`, `يس`, `36`, `surah 36`, `36:5` and `page 440` all find Ya-Sin; `juz 30` lists every surah in the juz; `the cow`, `kahf` or `rahman` work too. Reciters match on English or Arabic names with words in any order (`alafasy mishary`). Anything that finds no surah locally is sent to Quran.ai as a topic search.
+
+## Command Line
+
+The widget and the service both answer `omarchy-shell` IPC calls:
+
+```sh
+omarchy-shell quran-ui open                 # open the player popup
+omarchy-shell quran-ui openTab reciter      # surah | reciter | bookmarks | qurancom
+omarchy-shell quran-ui search "juz 30"      # open on the surah tab with a query filled in
+omarchy-shell quran-ui search "patience"    # topics go to Quran.ai semantic search
+omarchy-shell quran status                  # playback state as JSON
+omarchy-shell quran playSurah ar.alafasy 36 # play a surah by reciter id and number
+```
+
+Inside the popup, `j`/`k` move through the visible list, `Enter` plays the
+highlighted surah or selects the reciter, and `Esc` closes it.
 
 ## Dependencies
 

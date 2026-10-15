@@ -435,9 +435,25 @@ BarWidget {
         root.listCursor = Math.max(0, idx);
         if (idx >= 0) {
             Qt.callLater(function () {
-                root.scrollCursorIntoView(idx);
+                root.centerCursor(idx);
             });
+            // The browse block animates its height for 150 ms after opening;
+            // re-center once that settles so the row ends up mid-list.
+            centerCursorTimer.restart();
         }
+    }
+
+    function centerCursor(idx) {
+        var lv = root.activeListView();
+        if (lv && lv.count > idx && idx >= 0)
+            lv.positionViewAtIndex(idx, ListView.Center);
+    }
+
+    Timer {
+        id: centerCursorTimer
+        interval: 220
+        repeat: false
+        onTriggered: root.centerCursor(root.listCursor)
     }
 
     function activateCursor() {

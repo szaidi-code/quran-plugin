@@ -11,6 +11,7 @@ Item {
     property var pluginRegistry: null
 
     signal openTabRequested(string tabName)
+    signal searchRequested(string query)   // open the UI on the surah tab with this query
 
     readonly property string dataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
     readonly property string bookmarksPath: dataDir + "/bookmarks.json"

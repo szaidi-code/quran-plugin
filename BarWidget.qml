@@ -35,6 +35,21 @@ BarWidget {
             root.browseExpanded = true;
             root.activeTab = tabName;
             root.popupOpen = true;
+            root.cursorToCurrent();
+        }
+        // `omarchy-shell quran-ui search <query>`: open on the surah tab with
+        // the query filled in, exactly as if it had been typed.
+        function onSearchRequested(query) {
+            var q = String(query || "");
+            root.settingsOpen = false;
+            root.browseExpanded = true;
+            root.activeTab = "surah";
+            root.popupOpen = true; // resets the query, so set it afterwards
+            root.surahQuery = q;
+            searchField.text = q;
+            root.listCursor = 0;
+            if (quranService && q.trim() !== "" && (Model.isVerseKeyQuery(q) || Model.isSpanQuery(q) || root.filteredSurahs.length === 0))
+                quranService.searchQuran(q.trim());
         }
     }
 
@@ -59,6 +74,11 @@ BarWidget {
 
     // Collapsible browse section: expanded by default for discoverability.
     property bool browseExpanded: true
+
+    // Tallest the popup card may grow; the browse lists absorb whatever this
+    // leaves after the header, transport and reader card. The screen height
+    // still caps it on small displays.
+    readonly property real popupCapHeight: Style.space(980)
     property bool settingsOpen: false
 
     // Download prompt state (first-selection full-mushaf prompt)
@@ -309,6 +329,30 @@ BarWidget {
             return "ok";
         }
 
+        // Open on a browse tab: surah | reciter | bookmarks | qurancom.
+        function openTab(name: string): string {
+            var tab = String(name || "").toLowerCase();
+            if (tab === "marks" || tab === "bookmark")
+                tab = "bookmarks";
+            if (tab === "quran.com" || tab === "quran")
+                tab = "qurancom";
+            if (["surah", "reciter", "bookmarks", "qurancom"].indexOf(tab) === -1)
+                return "unknown tab: " + name;
+            if (!quranService)
+                return "service unavailable";
+            quranService.openTabRequested(tab);
+            return "ok";
+        }
+
+        // Open the surah tab with a search query (surah name, number, 2:255,
+        // juz 30, page 293, or a topic resolved through Quran.ai).
+        function search(query: string): string {
+            if (!quranService)
+                return "service unavailable";
+            quranService.searchRequested(String(query || ""));
+            return "ok";
+        }
+
         function close(): string {
             root.broadcast("close");
             return "ok";
@@ -485,13 +529,13 @@ BarWidget {
         focusTarget: keyCatcher
         padding: Style.space(22)
         contentWidth: popup.fittedContentWidth(Style.space(440))
-        contentHeight: popup.fittedContentHeight(root.settingsOpen ? settingsCol.implicitHeight : col.implicitHeight, Style.space(820))
+        contentHeight: popup.fittedContentHeight(root.settingsOpen ? settingsCol.implicitHeight : col.implicitHeight, root.popupCapHeight)
 
         // Height budget for the browse lists: the popup's maximum inner height
         // minus everything stacked above the lists. `topCol` and `browseChrome`
         // never depend on the lists, so this cannot form a binding loop and the
         // lists can never push content past the card's bottom edge.
-        readonly property real popupInnerMax: Math.min(Style.space(820), popup.availableCardHeight > 0 ? popup.availableCardHeight : Style.space(820)) - popup.verticalContentInset
+        readonly property real popupInnerMax: Math.min(root.popupCapHeight, popup.availableCardHeight > 0 ? popup.availableCardHeight : root.popupCapHeight) - popup.verticalContentInset
         readonly property real listAreaHeight: Math.max(Style.space(140), popupInnerMax - topCol.implicitHeight - browseToggleArea.implicitHeight - Style.space(20) - browseChrome.implicitHeight)
         // When ayah hits and surah rows are both on screen, the ayah list takes
         // at most ~45% so the surah list stays usable underneath it.

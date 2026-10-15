@@ -55,6 +55,7 @@ BarWidget {
     property string reciterQuery: ""
     property string bookmarkQuery: ""
     property int listCursor: 0
+    property bool tafsirOpen: false
 
     // Collapsible browse section: expanded by default for discoverability.
     property bool browseExpanded: true
@@ -67,6 +68,64 @@ BarWidget {
     readonly property var currentReciter: quranService ? quranService.currentReciter : null
     readonly property var filteredSurahs: Model.filterSurahs(quranService ? quranService.surahs : [], root.surahQuery)
     readonly property var filteredReciters: Model.filterReciters(quranService ? quranService.reciters : [], root.reciterQuery)
+    readonly property var semanticResults: (quranService && quranService.semanticSearchResults) ? quranService.semanticSearchResults : []
+
+    readonly property int liveSurahNum: root.currentSurah ? root.currentSurah.number : 1
+    readonly property int liveTotalVerses: root.currentSurah ? (root.currentSurah.total_verses || root.currentSurah.totalVerses || 1) : 1
+    readonly property int liveAyahNum: Model.estimateAyah(root.liveTotalVerses, (quranService && quranService.player) ? quranService.player.position : 0, (quranService && quranService.player) ? quranService.player.duration : 0)
+    readonly property var liveAyahData: {
+        if (!quranService)
+            return null;
+        if (quranService.currentAyahData && quranService.currentAyahData.surah === root.liveSurahNum && quranService.currentAyahData.ayah === root.liveAyahNum)
+            return quranService.currentAyahData;
+        var map = quranService.ayahCache || {};
+        return map[root.liveSurahNum + ":" + root.liveAyahNum] || null;
+    }
+
+    onLiveSurahNumChanged: {
+        root.tafsirOpen = false;
+        if (root.popupOpen)
+            ayahFetchTimer.restart();
+    }
+    onLiveAyahNumChanged: {
+        if (root.popupOpen)
+            ayahFetchTimer.restart();
+    }
+
+    Timer {
+        id: ayahFetchTimer
+        interval: 450
+        repeat: false
+        onTriggered: {
+            if (root.popupOpen && quranService)
+                quranService.requestAyahData(root.liveSurahNum, root.liveAyahNum, root.tafsirOpen);
+        }
+    }
+
+    Timer {
+        id: semanticSearchTimer
+        interval: 450
+        repeat: false
+        onTriggered: {
+            if (root.activeTab === "surah" && quranService) {
+                var q = root.surahQuery.trim();
+                if (q.length >= 2)
+                    quranService.searchQuran(q);
+            }
+        }
+    }
+
+    readonly property var quickJumpItems: [
+        { label: "Ayat al-Kursi", kind: "search", val: "2:255" },
+        { label: "Juz 1", kind: "juz", val: 1 },
+        { label: "Juz 15", kind: "juz", val: 15 },
+        { label: "Juz 29", kind: "juz", val: 29 },
+        { label: "Juz 30", kind: "juz", val: 30 },
+        { label: "Page 1", kind: "page", val: 1 },
+        { label: "Page 293 (Kahf)", kind: "page", val: 293 },
+        { label: "Page 440 (Ya-Sin)", kind: "page", val: 440 },
+        { label: "Page 562 (Mulk)", kind: "page", val: 562 }
+    ]
 
     readonly property var quranComMenuItems: {
         var sNum = root.currentSurah ? root.currentSurah.number : 1;
@@ -77,6 +136,14 @@ BarWidget {
         var jNum = Model.getSurahJuz(sNum);
 
         return [
+            {
+                id: "quran_ai_study",
+                title: "Study " + sName + " (" + sNum + ":" + curAyah + ") on Quran.ai",
+                desc: "Interactive Mushaf reader, AI study & grounded sources",
+                icon: "✨",
+                badge: "Quran.ai",
+                url: "https://quran.ai"
+            },
             {
                 id: "read_ayah",
                 title: "Read Ayah " + curAyah + " on Quran.com",
@@ -108,14 +175,6 @@ BarWidget {
                 icon: "📄",
                 badge: "Page " + pNum,
                 url: "https://quran.com/page/" + pNum
-            },
-            {
-                id: "explore_experience",
-                title: "Personalized Experience Guide",
-                desc: "Reading goals, Uthmani/IndoPak, themes & speeds",
-                icon: "✨",
-                badge: "Explore",
-                url: "https://quran.com/explore/build-your-personalized-quran-experience"
             },
             {
                 id: "reflections",
@@ -162,8 +221,11 @@ BarWidget {
     }
 
     function currentFiltered() {
-        if (root.activeTab === "surah")
-            return root.filteredSurahs;
+        if (root.activeTab === "surah") {
+            if (root.filteredSurahs.length > 0)
+                return root.filteredSurahs;
+            return root.semanticResults;
+        }
         if (root.activeTab === "reciter")
             return root.filteredReciters;
         if (root.activeTab === "bookmarks") {
@@ -176,8 +238,11 @@ BarWidget {
                 var rec = (bm.reciter || "").toLowerCase();
                 var note = (bm.note || "").toLowerCase();
                 var arab = (bm.surahArabic || "").toLowerCase();
+                var vArab = (bm.arabicText || "").toLowerCase();
+                var vTrans = (bm.translation || "").toLowerCase();
                 var ayahStr = "ayah " + bm.ayah;
-                return name.indexOf(q) !== -1 || rec.indexOf(q) !== -1 || note.indexOf(q) !== -1 || arab.indexOf(q) !== -1 || ayahStr.indexOf(q) !== -1;
+                var keyStr = bm.surah + ":" + bm.ayah;
+                return name.indexOf(q) !== -1 || rec.indexOf(q) !== -1 || note.indexOf(q) !== -1 || arab.indexOf(q) !== -1 || vArab.indexOf(q) !== -1 || vTrans.indexOf(q) !== -1 || ayahStr.indexOf(q) !== -1 || keyStr.indexOf(q) !== -1;
             });
         }
         return root.quranComMenuItems;
@@ -210,8 +275,11 @@ BarWidget {
             root.reciterQuery = "";
             root.surahQuery = "";
             root.bookmarkQuery = "";
-            if (quranService)
+            if (quranService) {
+                quranService.clearSemanticSearch();
                 quranService.refreshCacheSize();
+                quranService.requestAyahData(root.liveSurahNum, root.liveAyahNum, root.tafsirOpen);
+            }
         }
     }
 
@@ -289,9 +357,19 @@ BarWidget {
 
     function activateCursor() {
         if (root.activeTab === "surah") {
-            var s = root.filteredSurahs[root.listCursor];
-            if (s)
-                root.playSurah(s.number);
+            if (root.filteredSurahs.length > 0) {
+                var s = root.filteredSurahs[root.listCursor];
+                if (s)
+                    root.playSurah(s.number);
+            } else if (root.semanticResults.length > 0 && quranService) {
+                var sr = root.semanticResults[root.listCursor];
+                if (sr) {
+                    quranService.playAyahResult(sr);
+                    root.close();
+                }
+            } else if (root.surahQuery.trim() !== "" && quranService) {
+                quranService.searchQuran(root.surahQuery);
+            }
         } else if (root.activeTab === "reciter") {
             var r = root.filteredReciters[root.listCursor];
             if (r)
@@ -784,14 +862,112 @@ BarWidget {
                             spacing: Style.space(6)
 
                             readonly property int sNum: root.currentSurah ? root.currentSurah.number : 1
-                            readonly property int jNum: Model.getSurahJuz(sNum)
-                            readonly property int pNum: Model.getSurahPage(sNum)
+                            readonly property int jNum: (root.liveAyahData && root.liveAyahData.juz) ? root.liveAyahData.juz : Model.getSurahJuz(sNum)
+                            readonly property int pNum: (root.liveAyahData && root.liveAyahData.page) ? root.liveAyahData.page : Model.getSurahPage(sNum)
 
                             Text {
                                 text: "Juz " + parent.jNum + " · Hizb " + ((parent.jNum * 2) - 1) + " · Page " + parent.pNum + (root.currentSurah && root.currentSurah.type ? (" · " + root.currentSurah.type.toUpperCase()) : "")
                                 color: root.mutedC
                                 font.family: root.barFontFamily
                                 font.pixelSize: Style.font.caption
+                            }
+                        }
+
+                        // Live Ayah Arabic + Translation from mcp.quran.ai
+                        Column {
+                            width: parent.width
+                            spacing: Style.space(4)
+                            visible: root.liveAyahData !== null && (Boolean(root.liveAyahData.arabic) || Boolean(root.liveAyahData.translation))
+
+                            Text {
+                                width: parent.width
+                                visible: root.liveAyahData !== null && Boolean(root.liveAyahData.arabic)
+                                text: root.liveAyahData ? (root.liveAyahData.arabic || "") : ""
+                                color: root.fg
+                                font.family: root.barFontFamily
+                                font.pixelSize: Style.font.bodySmall
+                                horizontalAlignment: Text.AlignRight
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 3
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                width: parent.width
+                                visible: root.liveAyahData !== null && Boolean(root.liveAyahData.translation)
+                                text: root.liveAyahData ? (root.liveAyahData.translation || "") : ""
+                                color: root.mutedC
+                                font.family: root.barFontFamily
+                                font.pixelSize: Style.font.caption
+                                font.italic: true
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 3
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        // Collapsible inline Tafsir (Ibn Kathir via mcp.quran.ai)
+                        BorderSurface {
+                            width: parent.width
+                            visible: root.tafsirOpen
+                            height: tafsirBoxCol.implicitHeight + Style.space(16)
+                            radius: Style.space(8)
+                            color: Util.alpha(root.fg, 0.05)
+                            borderSpec: Border.flat(Util.alpha(root.accentC, 0.3), 1)
+
+                            Column {
+                                id: tafsirBoxCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Style.space(8)
+                                spacing: Style.space(4)
+
+                                Row {
+                                    width: parent.width
+                                    spacing: Style.space(6)
+
+                                    Text {
+                                        text: "📜 Tafsir Ibn Kathir (" + root.liveSurahNum + ":" + root.liveAyahNum + ")"
+                                        color: root.accentC
+                                        font.family: root.barFontFamily
+                                        font.pixelSize: Style.font.caption
+                                        font.bold: true
+                                    }
+
+                                    Text {
+                                        text: "Full on Quran.com ↗"
+                                        color: root.mutedC
+                                        font.family: root.barFontFamily
+                                        font.pixelSize: Style.space(10)
+                                        font.underline: tafsirExtMouse.containsMouse
+
+                                        MouseArea {
+                                            id: tafsirExtMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: Qt.openUrlExternally("https://quran.com/" + root.liveSurahNum + "/" + root.liveAyahNum + "/tafsirs")
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: {
+                                        if (quranService && quranService.loadingTafsir)
+                                            return "Loading Tafsir Ibn Kathir from Quran.ai...";
+                                        if (root.liveAyahData && root.liveAyahData.tafsir)
+                                            return root.liveAyahData.tafsir;
+                                        return "No tafsir text available for this verse.";
+                                    }
+                                    color: root.fg
+                                    font.family: root.barFontFamily
+                                    font.pixelSize: Style.font.caption
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 7
+                                    elide: Text.ElideRight
+                                }
                             }
                         }
 
@@ -855,16 +1031,17 @@ BarWidget {
                                 height: Style.space(26)
                                 width: tafsirLinkText.implicitWidth + Style.space(16)
                                 radius: height / 2
-                                color: Util.alpha(root.fg, tafsirLinkMouse.containsMouse ? 0.15 : 0.06)
-                                borderSpec: Border.controlSpec("normal", Util.alpha(root.fg, 0.15), root.fg)
+                                color: root.tafsirOpen ? Util.alpha(root.accentC, 0.25) : Util.alpha(root.fg, tafsirLinkMouse.containsMouse ? 0.15 : 0.06)
+                                borderSpec: Border.controlSpec("normal", root.tafsirOpen ? root.accentC : Util.alpha(root.fg, 0.15), root.fg)
 
                                 Text {
                                     id: tafsirLinkText
                                     anchors.centerIn: parent
-                                    text: "Tafsir ↗"
-                                    color: root.fg
+                                    text: root.tafsirOpen ? "Tafsir ▴" : "Tafsir ▾"
+                                    color: root.tafsirOpen ? root.accentC : root.fg
                                     font.family: root.barFontFamily
                                     font.pixelSize: Style.font.caption
+                                    font.bold: root.tafsirOpen
                                 }
 
                                 MouseArea {
@@ -873,10 +1050,9 @@ BarWidget {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        var s = root.currentSurah ? root.currentSurah.number : 1;
-                                        var v = root.currentSurah ? (root.currentSurah.total_verses || root.currentSurah.totalVerses || 1) : 1;
-                                        var a = Model.estimateAyah(v, seekBar.pos, seekBar.dur);
-                                        Qt.openUrlExternally("https://quran.com/" + s + "/" + a + "/tafsirs");
+                                        root.tafsirOpen = !root.tafsirOpen;
+                                        if (root.tafsirOpen && quranService)
+                                            quranService.requestAyahData(root.liveSurahNum, root.liveAyahNum, true);
                                     }
                                 }
                             }
@@ -1231,32 +1407,324 @@ BarWidget {
                             width: parent.width
                             spacing: Style.space(8)
 
-                            TextField {
-                                id: searchField
-                                visible: root.activeTab !== "qurancom" && (root.activeTab !== "bookmarks" || (quranService && quranService.bookmarks && quranService.bookmarks.length > 0))
+                            Row {
+                                id: searchAndSyncRow
                                 width: parent.width
-                                verticalPadding: Style.space(8)
-                                horizontalPadding: Style.space(12)
-                                placeholderText: root.activeTab === "surah" ? root.tr("searchSurah") : (root.activeTab === "reciter" ? root.tr("searchReciter") : "Search bookmarks...")
-                                foreground: root.fg
-                                font.family: root.barFontFamily
-                                text: root.activeTab === "surah" ? root.surahQuery : (root.activeTab === "reciter" ? root.reciterQuery : root.bookmarkQuery)
-                                onTextChanged: {
-                                    if (root.activeTab === "surah") {
-                                        root.surahQuery = text;
-                                        root.listCursor = 0;
-                                    } else if (root.activeTab === "reciter") {
-                                        reciterSearchTimer.restart();
-                                    } else {
-                                        root.bookmarkQuery = text;
-                                        root.listCursor = 0;
+                                spacing: Style.space(8)
+                                visible: root.activeTab !== "qurancom"
+
+                                readonly property bool showFindAyahBtn: root.activeTab === "surah" && root.surahQuery.trim().length >= 2
+
+                                TextField {
+                                    id: searchField
+                                    visible: root.activeTab !== "bookmarks" || (quranService && quranService.bookmarks && quranService.bookmarks.length > 0)
+                                    width: {
+                                        if (root.activeTab === "bookmarks")
+                                            return parent.width - syncQuranBtn.width - parent.spacing;
+                                        if (searchAndSyncRow.showFindAyahBtn)
+                                            return parent.width - findAyahBtn.width - parent.spacing;
+                                        return parent.width;
+                                    }
+                                    verticalPadding: Style.space(8)
+                                    horizontalPadding: Style.space(12)
+                                    placeholderText: root.activeTab === "surah" ? "Search surah, topic, 2:255, juz 30, page 50..." : (root.activeTab === "reciter" ? root.tr("searchReciter") : "Search bookmarks...")
+                                    foreground: root.fg
+                                    font.family: root.barFontFamily
+                                    text: root.activeTab === "surah" ? root.surahQuery : (root.activeTab === "reciter" ? root.reciterQuery : root.bookmarkQuery)
+                                    onTextChanged: {
+                                        if (root.activeTab === "surah") {
+                                            root.surahQuery = text;
+                                            root.listCursor = 0;
+                                            var q = text.trim();
+                                            if (q === "") {
+                                                semanticSearchTimer.stop();
+                                                if (quranService)
+                                                    quranService.clearSemanticSearch();
+                                            } else if (root.filteredSurahs.length === 0 || q.indexOf(":") !== -1 || q.toLowerCase().indexOf("juz") === 0 || q.toLowerCase().indexOf("page") === 0) {
+                                                semanticSearchTimer.restart();
+                                            }
+                                        } else if (root.activeTab === "reciter") {
+                                            reciterSearchTimer.restart();
+                                        } else {
+                                            root.bookmarkQuery = text;
+                                            root.listCursor = 0;
+                                        }
+                                    }
+                                }
+
+                                BorderSurface {
+                                    id: findAyahBtn
+                                    visible: searchAndSyncRow.showFindAyahBtn
+                                    readonly property bool isSearching: quranService ? quranService.searchingQuran : false
+                                    width: findAyahRow.implicitWidth + Style.space(18)
+                                    height: Style.space(34)
+                                    radius: Style.space(8)
+                                    color: Util.alpha(root.accentC, findAyahMouse.containsMouse ? 0.28 : 0.16)
+                                    borderSpec: Border.flat(root.accentC, 1)
+
+                                    Row {
+                                        id: findAyahRow
+                                        anchors.centerIn: parent
+                                        spacing: Style.space(5)
+
+                                        Text {
+                                            text: findAyahBtn.isSearching ? "󰑐" : "✨"
+                                            color: root.accentC
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.caption
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+
+                                        Text {
+                                            text: findAyahBtn.isSearching ? "Searching..." : "Find Ayah"
+                                            color: root.accentC
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.caption
+                                            font.bold: true
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: findAyahMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (quranService && root.surahQuery.trim() !== "")
+                                                quranService.searchQuran(root.surahQuery.trim());
+                                        }
+                                    }
+
+                                    PanelToolTip {
+                                        visible: findAyahMouse.containsMouse
+                                        text: "Semantic search across all 6,236 Ayahs via Quran.ai"
+                                        fontFamily: root.barFontFamily
+                                    }
+                                }
+
+                                BorderSurface {
+                                    id: syncQuranBtn
+                                    visible: root.activeTab === "bookmarks"
+                                    readonly property bool hasBookmarks: quranService && quranService.bookmarks && quranService.bookmarks.length > 0
+                                    readonly property bool isSyncing: quranService ? quranService.syncingBookmarks : false
+                                    readonly property string statusText: (quranService && quranService.syncStatusMessage) ? quranService.syncStatusMessage : ""
+                                    width: hasBookmarks ? Math.max(Style.space(124), syncBtnRow.implicitWidth + Style.space(20)) : parent.width
+                                    height: Style.space(34)
+                                    radius: Style.space(8)
+                                    color: Util.alpha(root.accentC, syncBtnMouse.containsMouse ? 0.28 : 0.16)
+                                    borderSpec: Border.flat(root.accentC, 1)
+
+                                    Row {
+                                        id: syncBtnRow
+                                        anchors.centerIn: parent
+                                        spacing: Style.space(6)
+
+                                        Text {
+                                            text: syncQuranBtn.isSyncing ? "󰑐" : "󰓦"
+                                            color: root.accentC
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.caption
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+
+                                        Text {
+                                            text: syncQuranBtn.statusText !== "" ? syncQuranBtn.statusText : (syncQuranBtn.isSyncing ? "Syncing..." : "Sync Quran.com")
+                                            color: root.accentC
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.caption
+                                            font.bold: true
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: syncBtnMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (quranService && !syncQuranBtn.isSyncing)
+                                                quranService.syncBookmarks();
+                                        }
+                                    }
+
+                                    PanelToolTip {
+                                        visible: syncBtnMouse.containsMouse
+                                        text: "Sync saved bookmarks from your Quran.com account"
+                                        fontFamily: root.barFontFamily
+                                    }
+                                }
+                            }
+
+                            // Quick Jump by Juz / Page / Passage (mcp.quran.ai fetch_quran_metadata)
+                            ListView {
+                                id: quickJumpListView
+                                visible: root.activeTab === "surah" && root.surahQuery.trim() === ""
+                                width: parent.width
+                                height: Style.space(26)
+                                implicitHeight: height
+                                orientation: ListView.Horizontal
+                                clip: true
+                                spacing: Style.space(6)
+                                boundsBehavior: Flickable.StopAtBounds
+                                model: root.quickJumpItems
+
+                                delegate: BorderSurface {
+                                    required property var modelData
+                                    height: Style.space(24)
+                                    width: qjText.implicitWidth + Style.space(14)
+                                    radius: height / 2
+                                    color: Util.alpha(root.accentC, qjMouse.containsMouse ? 0.26 : 0.1)
+                                    borderSpec: Border.flat(Util.alpha(root.accentC, 0.35), 1)
+
+                                    Text {
+                                        id: qjText
+                                        anchors.centerIn: parent
+                                        text: modelData.label
+                                        color: qjMouse.containsMouse ? root.accentC : root.fg
+                                        font.family: root.barFontFamily
+                                        font.pixelSize: Style.space(11)
+                                    }
+
+                                    MouseArea {
+                                        id: qjMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!quranService)
+                                                return;
+                                            if (modelData.kind === "search") {
+                                                root.surahQuery = modelData.val;
+                                                quranService.searchQuran(modelData.val);
+                                            } else {
+                                                quranService.navigateSpan(modelData.kind, modelData.val);
+                                                root.close();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Semantic Ayah Search Results from mcp.quran.ai
+                            ListView {
+                                id: semanticListView
+                                visible: root.activeTab === "surah" && root.surahQuery.trim() !== "" && root.semanticResults.length > 0
+                                width: parent.width
+                                height: Math.min(Style.space(280), Math.max(Style.space(76), contentHeight))
+                                implicitHeight: height
+                                clip: true
+                                spacing: Style.space(6)
+                                boundsBehavior: Flickable.StopAtBounds
+                                model: root.semanticResults
+
+                                delegate: BorderSurface {
+                                    id: semDelegate
+                                    required property var modelData
+                                    required property int index
+
+                                    readonly property bool hoveredCursor: (root.filteredSurahs.length === 0 && index === root.listCursor) || semMouse.containsMouse
+
+                                    width: semanticListView.width
+                                    height: semCol.implicitHeight + Style.space(18)
+                                    radius: Style.space(10)
+                                    color: hoveredCursor ? Util.alpha(root.accentC, 0.18) : Util.alpha(root.fg, 0.05)
+                                    borderSpec: hoveredCursor ? Border.flat(root.accentC, 1) : Border.flat(Util.alpha(root.fg, 0.12), 1)
+
+                                    MouseArea {
+                                        id: semMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (quranService) {
+                                                quranService.playAyahResult(modelData);
+                                                root.close();
+                                            }
+                                        }
+                                    }
+
+                                    Column {
+                                        id: semCol
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.margins: Style.space(10)
+                                        spacing: Style.space(4)
+
+                                        Row {
+                                            width: parent.width
+                                            spacing: Style.space(6)
+
+                                            Text {
+                                                text: "󰐊 " + (modelData.surah_name || ("Surah " + modelData.surah)) + (modelData.surah_arabic ? (" · " + modelData.surah_arabic) : "")
+                                                color: semDelegate.hoveredCursor ? root.accentC : root.fg
+                                                font.family: root.barFontFamily
+                                                font.pixelSize: Style.font.bodySmall
+                                                font.bold: true
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+
+                                            BorderSurface {
+                                                height: Style.space(18)
+                                                width: semAyahBadge.implicitWidth + Style.space(10)
+                                                radius: Style.space(4)
+                                                color: Util.alpha(root.accentC, 0.2)
+                                                anchors.verticalCenter: parent.verticalCenter
+
+                                                Text {
+                                                    id: semAyahBadge
+                                                    anchors.centerIn: parent
+                                                    text: "Ayah " + (modelData.ayah_key || (modelData.surah + ":" + modelData.ayah))
+                                                    color: root.accentC
+                                                    font.family: root.barFontFamily
+                                                    font.pixelSize: Style.space(10)
+                                                    font.bold: true
+                                                }
+                                            }
+
+                                            Text {
+                                                visible: Boolean(modelData.timestamp_ms)
+                                                text: "· " + Model.formatTime(modelData.timestamp_ms || 0)
+                                                color: root.mutedC
+                                                font.family: root.barFontFamily
+                                                font.pixelSize: Style.font.caption
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            visible: Boolean(modelData.arabic)
+                                            text: modelData.arabic || ""
+                                            color: root.fg
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.bodySmall
+                                            horizontalAlignment: Text.AlignRight
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            visible: Boolean(modelData.translation)
+                                            text: modelData.translation || ""
+                                            color: root.mutedC
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.caption
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
                                     }
                                 }
                             }
 
                             ListView {
                                 id: listView
-                                visible: root.activeTab !== "qurancom" && root.activeTab !== "bookmarks"
+                                visible: root.activeTab !== "qurancom" && root.activeTab !== "bookmarks" && (root.activeTab !== "surah" || root.filteredSurahs.length > 0)
                                 width: parent.width
                                 height: Math.min(Style.space(300), Math.max(Style.space(48), contentHeight))
                                 implicitHeight: height
@@ -1569,7 +2037,7 @@ BarWidget {
                                     readonly property bool hoveredCursor: index === root.listCursor || bmMouse.containsMouse
 
                                     width: bookmarksListView.width
-                                    height: Style.space(64)
+                                    height: Math.max(Style.space(64), bmCenterCol.implicitHeight + Style.space(22))
                                     radius: Style.space(10)
                                     color: hoveredCursor ? Util.alpha(root.accentC, 0.16) : Util.alpha(root.fg, 0.04)
                                     borderSpec: hoveredCursor ? Border.flat(root.accentC, 1) : Border.flat(Util.alpha(root.fg, 0.1), 1)
@@ -1707,12 +2175,13 @@ BarWidget {
 
                                     // Center Content Column
                                     Column {
+                                        id: bmCenterCol
                                         anchors.left: bmIconBox.right
                                         anchors.leftMargin: Style.space(12)
                                         anchors.right: bmActionsRow.left
                                         anchors.rightMargin: Style.space(12)
                                         anchors.verticalCenter: parent.verticalCenter
-                                        spacing: Style.space(4)
+                                        spacing: Style.space(3)
 
                                         Row {
                                             width: parent.width
@@ -1745,6 +2214,28 @@ BarWidget {
                                                     font.bold: true
                                                 }
                                             }
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            visible: Boolean(modelData.arabicText)
+                                            text: modelData.arabicText || ""
+                                            color: root.fg
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.caption
+                                            horizontalAlignment: Text.AlignRight
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            visible: Boolean(modelData.translation)
+                                            text: modelData.translation || ""
+                                            color: root.mutedC
+                                            font.family: root.barFontFamily
+                                            font.pixelSize: Style.font.caption
+                                            font.italic: true
+                                            elide: Text.ElideRight
                                         }
 
                                         Text {
@@ -1804,7 +2295,7 @@ BarWidget {
                             // does not become a delegate or affect scrolling.
                             Text {
                                 width: parent.width
-                                visible: (root.activeTab === "surah" || root.activeTab === "reciter" || (root.activeTab === "bookmarks" && quranService && quranService.bookmarks && quranService.bookmarks.length > 0)) && root.currentFiltered().length === 0
+                                visible: (root.activeTab === "surah" || root.activeTab === "reciter" || (root.activeTab === "bookmarks" && quranService && quranService.bookmarks && quranService.bookmarks.length > 0)) && root.currentFiltered().length === 0 && !(quranService && quranService.searchingQuran)
                                 text: root.trArgs("noResults", [root.activeTab === "surah" ? root.surahQuery : (root.activeTab === "reciter" ? root.reciterQuery : root.bookmarkQuery)])
                                 color: root.mutedC
                                 font.family: root.barFontFamily

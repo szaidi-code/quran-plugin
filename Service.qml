@@ -77,6 +77,17 @@ Item {
     property string errorMessage: ""
     property bool recitersLoading: false
     property bool catalogError: false      // last failure was the reciter fetch, not playback
+    property bool syncingBookmarks: false
+    property string syncStatusMessage: ""
+    property var pendingAyahSeek: null     // { surah, ayah, totalVerses } fallback seek when timestamp_ms == 0
+    property bool searchingQuran: false
+    property string lastSearchQuery: ""
+    property string lastSearchMode: ""
+    property var semanticSearchResults: []
+    property var currentAyahData: null     // { ayah_key, surah, ayah, arabic, translation, tafsir, juz, page, timestamp_ms }
+    property bool loadingAyahData: false
+    property bool loadingTafsir: false
+    property var ayahCache: ({})           // "surah:ayah" -> AyahDetailResponse
 
     // --- download state (shared between widget + IPC) ---
     property bool downloading: false
@@ -361,8 +372,17 @@ Item {
                     root.savedPosition = root.mpvPositionMs;
             }
         } else if (name === "duration") {
-            if (typeof v === "number" && isFinite(v) && v > 0)
+            if (typeof v === "number" && isFinite(v) && v > 0) {
                 root.mpvDurationMs = Math.round(v * 1000);
+                if (root.pendingAyahSeek && root.pendingAyahSeek.surah === root.surahNumber && root.pendingAyahSeek.ayah > 1) {
+                    var ps = root.pendingAyahSeek;
+                    root.pendingAyahSeek = null;
+                    var tv = ps.totalVerses > 0 ? ps.totalVerses : 100;
+                    var targetMs = Math.round(((ps.ayah - 1) / tv) * root.mpvDurationMs);
+                    if (targetMs > 0)
+                        root._mpvCommand(["set_property", "time-pos", targetMs / 1000]);
+                }
+            }
         } else if (name === "eof-reached") {
             if (v === true)
                 root.mpvEof = true;
@@ -1346,6 +1366,7 @@ Item {
         var juz = Model.getSurahJuz(sNum);
         var arabicName = (curSurahObj && curSurahObj.name) ? curSurahObj.name : "";
 
+        var cachedAyah = root.ayahCache[sNum + ":" + estimatedAyah];
         var bm = {
             id: Date.now().toString(),
             surah: sNum,
@@ -1353,12 +1374,14 @@ Item {
             surahArabic: arabicName,
             ayah: estimatedAyah,
             totalVerses: totalVerses,
-            juz: juz,
-            page: page,
+            juz: (cachedAyah && cachedAyah.juz) ? cachedAyah.juz : juz,
+            page: (cachedAyah && cachedAyah.page) ? cachedAyah.page : page,
             reciterId: rId,
             reciter: rLabel,
             timestamp_ms: posMs,
             duration_ms: durMs,
+            arabicText: (cachedAyah && cachedAyah.arabic) ? cachedAyah.arabic : "",
+            translation: (cachedAyah && cachedAyah.translation) ? cachedAyah.translation : "",
             note: note || ("Ayah " + estimatedAyah),
             createdAt: new Date().toISOString()
         };
@@ -1367,6 +1390,8 @@ Item {
         list.unshift(bm);
         root.bookmarks = list;
         root.saveBookmarks();
+        if (!bm.arabicText || !bm.translation)
+            root.requestAyahData(sNum, estimatedAyah, false);
         return bm;
     }
 
@@ -1391,10 +1416,154 @@ Item {
         var surahToUse = bm.surah || root.surahNumber;
         var pos = bm.timestamp_ms || 0;
 
+        if (pos === 0 && bm.ayah > 1) {
+            root.pendingAyahSeek = {
+                surah: surahToUse,
+                ayah: bm.ayah,
+                totalVerses: bm.totalVerses || 100
+            };
+        } else {
+            root.pendingAyahSeek = null;
+        }
+
         root.reciterId = reciterToUse;
         root.surahNumber = surahToUse;
         root.savedPosition = pos;
         root._playSurahOrDownload(reciterToUse, surahToUse, true, pos);
+        return true;
+    }
+
+    function syncBookmarks() {
+        if (root.syncingBookmarks)
+            return false;
+        if (!root.quranctlBinary) {
+            root.errorMessage = Model.tr(root.language, "setupRequired");
+            return false;
+        }
+        root.syncingBookmarks = true;
+        root.syncStatusMessage = "Syncing...";
+        syncBookmarksProc.command = [root.quranctlBinary, "sync", "--interactive", "--state-dir", root.dataDir];
+        syncBookmarksProc.running = true;
+        return true;
+    }
+
+    function searchQuran(query) {
+        var q = String(query || "").trim();
+        if (q === "") {
+            root.clearSemanticSearch();
+            return false;
+        }
+        if (!root.quranctlBinary) {
+            root.errorMessage = Model.tr(root.language, "setupRequired");
+            return false;
+        }
+        if (mcpSearchProc.running)
+            mcpSearchProc.running = false;
+        root.searchingQuran = true;
+        root.lastSearchQuery = q;
+        mcpSearchProc.lastStdout = "";
+        mcpSearchProc.command = [root.quranctlBinary, "search", q, "--limit", "8"];
+        mcpSearchProc.running = true;
+        return true;
+    }
+
+    function clearSemanticSearch() {
+        if (mcpSearchProc.running)
+            mcpSearchProc.running = false;
+        root.searchingQuran = false;
+        root.lastSearchQuery = "";
+        root.lastSearchMode = "";
+        root.semanticSearchResults = [];
+    }
+
+    function playAyahResult(item) {
+        if (!item || !item.surah)
+            return false;
+        var reciterToUse = root.reciterId || Model.DEFAULT_RECITER;
+        var surahToUse = parseInt(item.surah, 10) || 1;
+        var ayahToUse = parseInt(item.ayah, 10) || 1;
+        var pos = parseInt(item.timestamp_ms, 10) || 0;
+        var totalV = parseInt(item.total_verses || item.totalVerses, 10) || 100;
+
+        if (pos === 0 && ayahToUse > 1) {
+            root.pendingAyahSeek = {
+                surah: surahToUse,
+                ayah: ayahToUse,
+                totalVerses: totalV
+            };
+        } else {
+            root.pendingAyahSeek = null;
+        }
+
+        if (item.arabic || item.translation) {
+            var key = surahToUse + ":" + ayahToUse;
+            var nextCache = Object.assign({}, root.ayahCache);
+            var existing = nextCache[key] || {};
+            nextCache[key] = Object.assign({}, existing, {
+                ayah_key: key,
+                surah: surahToUse,
+                ayah: ayahToUse,
+                arabic: item.arabic || existing.arabic || "",
+                translation: item.translation || existing.translation || "",
+                juz: item.juz || existing.juz || Model.getSurahJuz(surahToUse),
+                page: item.page || existing.page || Model.getSurahPage(surahToUse),
+                timestamp_ms: pos
+            });
+            root.ayahCache = nextCache;
+            root.currentAyahData = nextCache[key];
+        }
+
+        root.surahNumber = surahToUse;
+        root.savedPosition = pos;
+        root._playSurahOrDownload(reciterToUse, surahToUse, true, pos);
+        return true;
+    }
+
+    function navigateSpan(kind, val) {
+        if (!root.quranctlBinary)
+            return false;
+        var n = parseInt(val, 10);
+        if (isNaN(n) || n < 1)
+            return false;
+        var flag = kind === "page" ? "--page" : (kind === "hizb" ? "--hizb" : "--juz");
+        if (mcpNavigateProc.running)
+            mcpNavigateProc.running = false;
+        mcpNavigateProc.lastStdout = "";
+        mcpNavigateProc.command = [root.quranctlBinary, "navigate", flag, String(n)];
+        mcpNavigateProc.running = true;
+        return true;
+    }
+
+    function requestAyahData(surah, ayah, withTafsir) {
+        var s = parseInt(surah, 10) || 1;
+        var a = parseInt(ayah, 10) || 1;
+        if (s < 1 || s > 114 || a < 1)
+            return false;
+        var key = s + ":" + a;
+        var cached = root.ayahCache[key];
+        if (cached && cached.arabic && (!withTafsir || cached.tafsir)) {
+            root.currentAyahData = cached;
+            return true;
+        }
+        if (cached)
+            root.currentAyahData = cached;
+        if (!root.quranctlBinary)
+            return false;
+        if (mcpAyahProc.running && mcpAyahProc.targetKey === key && (!withTafsir || mcpAyahProc.withTafsir))
+            return true;
+        if (mcpAyahProc.running)
+            mcpAyahProc.running = false;
+
+        root.loadingAyahData = !cached || !cached.arabic;
+        root.loadingTafsir = !!withTafsir;
+        mcpAyahProc.targetKey = key;
+        mcpAyahProc.withTafsir = !!withTafsir;
+        mcpAyahProc.lastStdout = "";
+        var cmd = [root.quranctlBinary, "ayah", key];
+        if (withTafsir)
+            cmd.push("--with-tafsir");
+        mcpAyahProc.command = cmd;
+        mcpAyahProc.running = true;
         return true;
     }
 
@@ -1772,6 +1941,149 @@ Item {
         onFileChanged: reload()
     }
 
+    Timer {
+        id: syncStatusClearTimer
+        interval: 4500
+        repeat: false
+        onTriggered: root.syncStatusMessage = ""
+    }
+
+    Process {
+        id: syncBookmarksProc
+        property string lastStdout: ""
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: syncBookmarksProc.lastStdout = text
+        }
+        onExited: function (exitCode) {
+            root.syncingBookmarks = false;
+            bookmarksFile.reload();
+            if (exitCode === 0) {
+                var parsed = null;
+                try {
+                    parsed = JSON.parse((syncBookmarksProc.lastStdout || "").trim());
+                } catch (e) {
+                    parsed = null;
+                }
+                if (parsed && typeof parsed.synced === "number")
+                    root.syncStatusMessage = parsed.synced > 0 ? ("Synced +" + parsed.synced) : "Up to date";
+                else
+                    root.syncStatusMessage = "Synced";
+            } else {
+                root.syncStatusMessage = "Sync failed";
+            }
+            syncBookmarksProc.lastStdout = "";
+            syncStatusClearTimer.restart();
+        }
+    }
+
+    Process {
+        id: mcpSearchProc
+        property string lastStdout: ""
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: mcpSearchProc.lastStdout = text
+        }
+        onExited: function (exitCode) {
+            root.searchingQuran = false;
+            if (exitCode === 0) {
+                var parsed = null;
+                try {
+                    parsed = JSON.parse((mcpSearchProc.lastStdout || "").trim());
+                } catch (e) {
+                    parsed = null;
+                }
+                if (parsed && Array.isArray(parsed.results)) {
+                    root.lastSearchMode = parsed.mode || "semantic";
+                    root.semanticSearchResults = parsed.results;
+                } else {
+                    root.semanticSearchResults = [];
+                }
+            } else {
+                root.semanticSearchResults = [];
+            }
+            mcpSearchProc.lastStdout = "";
+        }
+    }
+
+    Process {
+        id: mcpAyahProc
+        property string lastStdout: ""
+        property string targetKey: ""
+        property bool withTafsir: false
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: mcpAyahProc.lastStdout = text
+        }
+        onExited: function (exitCode) {
+            root.loadingAyahData = false;
+            root.loadingTafsir = false;
+            if (exitCode === 0) {
+                var parsed = null;
+                try {
+                    parsed = JSON.parse((mcpAyahProc.lastStdout || "").trim());
+                } catch (e) {
+                    parsed = null;
+                }
+                if (parsed && parsed.ayah_key) {
+                    var nextCache = Object.assign({}, root.ayahCache);
+                    var prev = nextCache[parsed.ayah_key] || {};
+                    if (!parsed.tafsir && prev.tafsir)
+                        parsed.tafsir = prev.tafsir;
+                    nextCache[parsed.ayah_key] = parsed;
+                    root.ayahCache = nextCache;
+                    root.currentAyahData = parsed;
+
+                    // Also enrich any matching local bookmark missing verse text
+                    if (root.bookmarks && root.bookmarks.length > 0 && (parsed.arabic || parsed.translation)) {
+                        var updated = false;
+                        var bms = root.bookmarks.slice();
+                        for (var i = 0; i < bms.length; i++) {
+                            if (bms[i].surah === parsed.surah && bms[i].ayah === parsed.ayah) {
+                                if (!bms[i].arabicText && parsed.arabic) {
+                                    bms[i] = Object.assign({}, bms[i], {
+                                        arabicText: parsed.arabic,
+                                        translation: parsed.translation || bms[i].translation || "",
+                                        juz: parsed.juz || bms[i].juz,
+                                        page: parsed.page || bms[i].page
+                                    });
+                                    updated = true;
+                                }
+                            }
+                        }
+                        if (updated) {
+                            root.bookmarks = bms;
+                            root.saveBookmarks();
+                        }
+                    }
+                }
+            }
+            mcpAyahProc.lastStdout = "";
+        }
+    }
+
+    Process {
+        id: mcpNavigateProc
+        property string lastStdout: ""
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: mcpNavigateProc.lastStdout = text
+        }
+        onExited: function (exitCode) {
+            if (exitCode === 0) {
+                var parsed = null;
+                try {
+                    parsed = JSON.parse((mcpNavigateProc.lastStdout || "").trim());
+                } catch (e) {
+                    parsed = null;
+                }
+                if (parsed && parsed.surah)
+                    root.playAyahResult(parsed);
+            }
+            mcpNavigateProc.lastStdout = "";
+        }
+    }
+
     Process {
         id: recitersProc
         stdout: StdioCollector {
@@ -2080,6 +2392,23 @@ Item {
             if (isNaN(idx) || idx < 0)
                 return "error: invalid index";
             return root.pickupBookmark(idx) ? "ok" : "error: could not pickup bookmark";
+        }
+
+        function syncBookmarks(): string {
+            return root.syncBookmarks() ? "ok" : "error: sync already in progress or unavailable";
+        }
+
+        function search(query: string): string {
+            var q = root._capString(query, 256);
+            return root.searchQuran(q) ? "ok" : "error: empty or invalid query";
+        }
+
+        function navigateJuz(juzStr: string): string {
+            return root.navigateSpan("juz", juzStr) ? "ok" : "error: invalid juz";
+        }
+
+        function navigatePage(pageStr: string): string {
+            return root.navigateSpan("page", pageStr) ? "ok" : "error: invalid page";
         }
 
         function seek(ms: string): string {

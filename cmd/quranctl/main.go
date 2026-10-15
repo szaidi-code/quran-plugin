@@ -37,6 +37,16 @@ func main() {
 		code = cmdDownload(os.Args[2:])
 	case "remove":
 		code = cmdRemove(os.Args[2:], os.Stdout, os.Stderr)
+	case "sync":
+		code = cmdSync(os.Args[2:], os.Stdout, os.Stderr)
+	case "login":
+		code = cmdLogin(os.Args[2:], os.Stdout, os.Stderr)
+	case "search":
+		code = cmdSearch(os.Args[2:], os.Stdout, os.Stderr)
+	case "ayah":
+		code = cmdAyah(os.Args[2:], os.Stdout, os.Stderr)
+	case "navigate":
+		code = cmdNavigate(os.Args[2:], os.Stdout, os.Stderr)
 	default:
 		fmt.Fprintf(os.Stderr, "quranctl: unknown command %q\n", os.Args[1])
 		usage()
@@ -46,5 +56,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: quranctl {validate|download|remove} ...")
+	fmt.Fprintln(os.Stderr, "usage: quranctl {validate|download|remove|sync|login|search|ayah|navigate} ...")
 }

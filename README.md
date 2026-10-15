@@ -13,9 +13,12 @@ An elegant, feature-rich Quran recitation player and reader companion for the Om
 * **Spacious & Modern UI**: Roomy 440px layout designed to integrate seamlessly with Omarchy's system theme and typography.
 * **Monochrome Closed Mushaf Icon**: Uniform, clean icon matching the system bar theme.
 * **Reader Location Tracker ("Where The Reader Is")**: Live indicator computing current Surah, estimated Ayah, Juz, Hizb, Page number in the Madinah Mushaf, and progress percentage.
-* **Reading Bookmarks & Instant "Pick Up"**: Save bookmarks with timestamp and ayah position, and pick up right where you left off anytime with a single click.
+* **Reading Bookmarks, Quran.com Cloud Sync & Context Preview**: Save bookmarks with timestamp and ayah position, sync your cloud bookmarks and reading sessions from Quran.com (via OAuth2 PKCE or browser sign-in bridge), and preview Uthmani Arabic script and English translation right on each bookmark card.
+* **Semantic "Find Ayah & Play" Search (`mcp.quran.ai`)**: Search the Quran by natural-language meaning or topic (e.g., `"patience in hardship"`, `"mercy"`) or exact verse key (`2:255`) and jump straight to the matching Ayah's audio timestamp.
+* **Live Now-Playing Ayah Reader & Inline Tafsir Drawer**: View Uthmani Arabic script, Saheeh International translation, and an expandable **Tafsir Ibn Kathir** drawer directly inside the Now-Playing card.
+* **Quick Jump by Juz, Page, or Hizb**: One-click navigation pills and CLI/IPC commands to jump directly to any Juz (1–30), Madinah Mushaf Page (1–604), or Hizb (1–60).
 * **Quran.com Explore Suite**: Direct one-click access to the current Ayah on Quran.com, Ibn Kathir/Sa'di Tafsir, word-by-word morphology/grammar, Madinah Mushaf layout, and the personalized reading experience guide.
-* **Model Context Protocol (MCP) Server**: Built-in Python MCP server (`mcp/server.py`) exposing reader position, verse lookups, player controls, and bookmark management to AI coding assistants (Claude, Antigravity, etc.).
+* **Model Context Protocol (MCP) Server**: Built-in Python MCP server (`mcp/server.py`) plus native Go Streamable HTTP client (`cmd/quranctl/mcp.go`) connected to Quran Foundation's `https://mcp.quran.ai`.
 * **Instant Streaming & Offline Audio**: Fast byte-range streaming via a hardened loopback Go audio proxy (`quranproxyd`) with deep media validation and background full-mushaf caching.
 * **Multilingual Search**: Live instant search across 114 Surahs and reciters in Arabic, English, and 9 additional languages.
 
@@ -135,6 +138,18 @@ This plugin was written with the security model of the Omarchy shell in mind
 * Left-click the bar icon to open the popup and select a surah to play.
 * Right/middle-click toggles play/pause; scroll wheel moves prev/next surah.
 
+### CLI (`quranctl`)
+
+```sh
+quranctl search "patience in hardship"
+quranctl ayah 2:255 --with-tafsir
+quranctl navigate --juz 30
+quranctl navigate --page 293
+quranctl navigate --hizb 15
+quranctl sync --login-browser
+quranctl sync --pull
+```
+
 ### IPC
 
 The service registers as the `quran` IPC target:
@@ -142,6 +157,10 @@ The service registers as the `quran` IPC target:
 ```sh
 omarchy-shell quran status
 omarchy-shell quran playSurah <reciter> <surah>
+omarchy-shell quran search "<query-or-verse-key>"
+omarchy-shell quran navigateJuz <1-30>
+omarchy-shell quran navigatePage <1-604>
+omarchy-shell quran syncBookmarks
 omarchy-shell quran download <reciter> [surah]
 omarchy-shell quran cacheInfo
 omarchy-shell quran clearCache

@@ -1,0 +1,11 @@
+# Trusted SHA-256 digests for the pinned v1.2.0 release archives.
+#
+# install.sh verifies the downloaded archive against these values BEFORE
+# extracting it, and fails closed if this file, the matching entry, or the
+# expected binaries are absent. These digests live in the reviewed source
+# tree so they are not supplied by the release being verified.
+#
+# Built and attested by .github/workflows/release.yml at tag v1.2.0.
+# Provenance: gh attestation verify linux-<arch>.tar.gz --repo szaidi-code/quran-plugin
+02a3ec0fa2f6392e73fa714e31cbe11aa7868280ea93c72f57e0bdcd41ace29f  linux-amd64.tar.gz
+0887a68a83715581b036c09da3dea8395c1086d3841974396ec56cb596a9385f  linux-arm64.tar.gz

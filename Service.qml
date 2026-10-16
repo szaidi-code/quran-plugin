@@ -1363,6 +1363,11 @@ Item {
         var curSurahObj = root.currentSurah;
         var totalVerses = (curSurahObj && (curSurahObj.total_verses || curSurahObj.totalVerses)) ? (curSurahObj.total_verses || curSurahObj.totalVerses) : 100;
         var estimatedAyah = Model.estimateAyah(totalVerses, posMs, durMs);
+        if (root.currentAyahData && root.currentAyahData.surah === sNum && root.currentAyahData.ayah > 0) {
+            var targetTs = root.currentAyahData.timestamp_ms || 0;
+            if (targetTs > 0 && Math.abs(posMs - targetTs) <= 15000)
+                estimatedAyah = root.currentAyahData.ayah;
+        }
         var page = Model.getSurahPage(sNum);
         var juz = Model.getSurahJuz(sNum);
         var arabicName = (curSurahObj && curSurahObj.name) ? curSurahObj.name : "";
@@ -1393,6 +1398,42 @@ Item {
         root.saveBookmarks();
         if (!bm.arabicText || !bm.translation)
             root.requestAyahData(sNum, estimatedAyah, false);
+        return bm;
+    }
+
+    function bookmarkAyahResult(item) {
+        if (!item || !item.surah)
+            return null;
+        var sNum = parseInt(item.surah, 10) || 1;
+        var aNum = parseInt(item.ayah, 10) || 1;
+        var sLabel = item.surah_name || root.surahLabel(sNum);
+        var rLabel = root.reciterLabel();
+        var rId = root.reciterId || "ar.alafasy";
+        var posMs = parseInt(item.timestamp_ms, 10) || 0;
+        var durMs = parseInt(item.duration_ms, 10) || 0;
+        var totalVerses = parseInt(item.total_verses || item.totalVerses, 10) || 100;
+        var bm = {
+            id: Date.now().toString(),
+            surah: sNum,
+            surahName: sLabel,
+            surahArabic: item.surah_arabic || "",
+            ayah: aNum,
+            totalVerses: totalVerses,
+            juz: item.juz || Model.getSurahJuz(sNum),
+            page: item.page || Model.getSurahPage(sNum),
+            reciterId: rId,
+            reciter: rLabel,
+            timestamp_ms: posMs,
+            duration_ms: durMs,
+            arabicText: item.arabic || "",
+            translation: item.translation || "",
+            note: "Ayah " + aNum,
+            createdAt: new Date().toISOString()
+        };
+        var list = root.bookmarks ? root.bookmarks.slice() : [];
+        list.unshift(bm);
+        root.bookmarks = list;
+        root.saveBookmarks();
         return bm;
     }
 
@@ -2196,9 +2237,12 @@ Item {
                 var mid = root.mushafPending;
                 root.mushafPending = null;
                 var work = [];
-                for (var mi = 1; mi <= 114; mi++)
-                    work.push(mi);
-                root.startMushafDownload(mid, work);
+                for (var mi = 1; mi <= 114; mi++) {
+                    if (!root.isSurahDownloaded(mid, mi))
+                        work.push(mi);
+                }
+                if (work.length > 0)
+                    root.startMushafDownload(mid, work);
             }
             downloadProc.targetReciter = null;
             downloadProc.targetSurah = 0;

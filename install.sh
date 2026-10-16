@@ -18,7 +18,7 @@ set -euo pipefail
 # Immutable install coordinates. Deliberately NOT overridable from the
 # environment: the download source must match the digests reviewed in-tree.
 readonly REPO="szaidi-code/quran-plugin"
-readonly PINNED_TAG="v1.1.2"
+readonly PINNED_TAG="v1.2.0"
 
 # Network & transfer safety bounds for binary release downloads.
 # Release archives are ~4.6 MiB (amd64) and ~4.2 MiB (arm64); cap at 16 MiB.

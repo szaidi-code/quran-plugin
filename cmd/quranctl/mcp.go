@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -445,6 +446,7 @@ func cmdSearch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	results := make([]SearchResultItem, 0, limit)
+	uniqueSurahs := map[int]bool{}
 	for _, r := range rawSearch.Results {
 		if len(results) >= limit {
 			break
@@ -460,6 +462,7 @@ func cmdSearch(args []string, stdout, stderr io.Writer) int {
 		if aNum < 1 {
 			aNum = 1
 		}
+		uniqueSurahs[sNum] = true
 		meta := surahMetadata[sNum]
 		var trText, trEdition string
 		if len(r.Translations) > 0 {
@@ -469,7 +472,6 @@ func cmdSearch(args []string, stdout, stderr io.Writer) int {
 				trEdition = r.Translations[0].Edition.Author
 			}
 		}
-		posMs, durMs := lookupVerseTiming(ctx, sNum, aNum, meta.TotalVerses, timingsCache)
 		citation := r.CitationURL
 		if citation == "" {
 			citation = fmt.Sprintf("https://quran.com/%d:%d", sNum, aNum)
@@ -484,13 +486,39 @@ func cmdSearch(args []string, stdout, stderr io.Writer) int {
 			Arabic:      strings.TrimSpace(r.Text),
 			Translation: trText,
 			Edition:     trEdition,
-			TimestampMs: posMs,
-			DurationMs:  durMs,
 			Juz:         meta.Juz,
 			Page:        meta.Page,
 			CitationURL: citation,
 			Score:       r.Score,
 		})
+	}
+
+	var (
+		wg  sync.WaitGroup
+		mu  sync.Mutex
+		sem = make(chan struct{}, 6)
+	)
+	for sNum := range uniqueSurahs {
+		wg.Add(1)
+		go func(sn int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			localCache := map[int]map[int][2]int64{}
+			lookupVerseTiming(ctx, sn, 1, surahMetadata[sn].TotalVerses, localCache)
+			mu.Lock()
+			if m, ok := localCache[sn]; ok {
+				timingsCache[sn] = m
+			}
+			mu.Unlock()
+		}(sNum)
+	}
+	wg.Wait()
+
+	for i := range results {
+		posMs, durMs := lookupVerseTiming(ctx, results[i].Surah, results[i].Ayah, results[i].TotalVerses, timingsCache)
+		results[i].TimestampMs = posMs
+		results[i].DurationMs = durMs
 	}
 
 	writeJSON(stdout, SearchResponse{

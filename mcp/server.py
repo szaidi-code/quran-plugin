@@ -14,6 +14,8 @@ import subprocess
 import os
 import urllib.request
 import urllib.parse
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Juz and Page start mappings for the standard 114 Surahs (Madinah Mushaf)
@@ -52,10 +54,10 @@ SURAH_METADATA = {
     32: {"name": "السجدة", "transliteration": "As-Sajdah", "translation": "The Prostration", "verses": 30, "juz": 21, "page": 415, "type": "Meccan"},
     33: {"name": "الأحزاب", "transliteration": "Al-Ahzab", "translation": "The Combined Forces", "verses": 73, "juz": 21, "page": 418, "type": "Medinan"},
     34: {"name": "سبإ", "transliteration": "Saba", "translation": "Sheba", "verses": 54, "juz": 22, "page": 428, "type": "Meccan"},
-    35: {"name": "فاطر", "transliteration": "Fatir", "translation": "The Originator", "verses": 45, "juz": 22, "page": 434, "type": "Meccan"},
-    36: {"name": "يس", "transliteration": "Ya-Sin", "translation": "Ya-Sin", "verses": 83, "juz": 22, "page": 440, "type": "Meccan"},
-    37: {"name": "الصافات", "transliteration": "As-Saffat", "translation": "Those Who Set the Ranks", "verses": 182, "juz": 23, "page": 446, "type": "Meccan"},
-    38: {"name": "ص", "transliteration": "Sad", "translation": "The Letter Sad", "verses": 88, "juz": 23, "page": 453, "type": "Meccan"},
+    35: {"name": "فاطر", "transliteration": "Fatir", "translation": "Originator", "verses": 45, "juz": 22, "page": 434, "type": "Meccan"},
+    36: {"name": "يس", "transliteration": "Ya-Sin", "translation": "Ya Sin", "verses": 83, "juz": 22, "page": 440, "type": "Meccan"},
+    37: {"name": "الصافات", "transliteration": "As-Saffat", "translation": "Those who set the Ranks", "verses": 182, "juz": 23, "page": 446, "type": "Meccan"},
+    38: {"name": "ص", "transliteration": "Sad", "translation": "The Letter \"Saad\"", "verses": 88, "juz": 23, "page": 453, "type": "Meccan"},
     39: {"name": "الزمر", "transliteration": "Az-Zumar", "translation": "The Troops", "verses": 75, "juz": 23, "page": 458, "type": "Meccan"},
     40: {"name": "غافر", "transliteration": "Ghafir", "translation": "The Forgiver", "verses": 85, "juz": 24, "page": 467, "type": "Meccan"},
     41: {"name": "فصلت", "transliteration": "Fussilat", "translation": "Explained in Detail", "verses": 54, "juz": 24, "page": 477, "type": "Meccan"},
@@ -66,11 +68,69 @@ SURAH_METADATA = {
     46: {"name": "الأحقاف", "transliteration": "Al-Ahqaf", "translation": "The Wind-Curved Sandhills", "verses": 35, "juz": 26, "page": 502, "type": "Meccan"},
     47: {"name": "محمد", "transliteration": "Muhammad", "translation": "Muhammad", "verses": 38, "juz": 26, "page": 507, "type": "Medinan"},
     48: {"name": "الفتح", "transliteration": "Al-Fath", "translation": "The Victory", "verses": 29, "juz": 26, "page": 511, "type": "Medinan"},
-    49: {"name": "الحجرات", "transliteration": "Al-Hujurat", "translation": "The Inner Apartments", "verses": 18, "juz": 26, "page": 515, "type": "Medinan"},
-    50: {"name": "ق", "transliteration": "Qaf", "translation": "The Letter Qaf", "verses": 45, "juz": 26, "page": 518, "type": "Meccan"},
+    49: {"name": "الحجرات", "transliteration": "Al-Hujurat", "translation": "The Rooms", "verses": 18, "juz": 26, "page": 515, "type": "Medinan"},
+    50: {"name": "ق", "transliteration": "Qaf", "translation": "The Letter \"Qaf\"", "verses": 45, "juz": 26, "page": 518, "type": "Meccan"},
+    51: {"name": "الذاريات", "transliteration": "Adh-Dhariyat", "translation": "The Winnowing Winds", "verses": 60, "juz": 26, "page": 520, "type": "Meccan"},
+    52: {"name": "الطور", "transliteration": "At-Tur", "translation": "The Mount", "verses": 49, "juz": 27, "page": 523, "type": "Meccan"},
+    53: {"name": "النجم", "transliteration": "An-Najm", "translation": "The Star", "verses": 62, "juz": 27, "page": 526, "type": "Meccan"},
+    54: {"name": "القمر", "transliteration": "Al-Qamar", "translation": "The Moon", "verses": 55, "juz": 27, "page": 528, "type": "Meccan"},
     55: {"name": "الرحمن", "transliteration": "Ar-Rahman", "translation": "The Beneficent", "verses": 78, "juz": 27, "page": 531, "type": "Medinan"},
     56: {"name": "الواقعة", "transliteration": "Al-Waqi'ah", "translation": "The Inevitable", "verses": 96, "juz": 27, "page": 534, "type": "Meccan"},
+    57: {"name": "الحديد", "transliteration": "Al-Hadid", "translation": "The Iron", "verses": 29, "juz": 27, "page": 537, "type": "Medinan"},
+    58: {"name": "المجادلة", "transliteration": "Al-Mujadila", "translation": "The Pleading Woman", "verses": 22, "juz": 28, "page": 542, "type": "Medinan"},
+    59: {"name": "الحشر", "transliteration": "Al-Hashr", "translation": "The Exile", "verses": 24, "juz": 28, "page": 545, "type": "Medinan"},
+    60: {"name": "الممتحنة", "transliteration": "Al-Mumtahanah", "translation": "She that is to be examined", "verses": 13, "juz": 28, "page": 549, "type": "Medinan"},
+    61: {"name": "الصف", "transliteration": "As-Saf", "translation": "The Ranks", "verses": 14, "juz": 28, "page": 551, "type": "Medinan"},
+    62: {"name": "الجمعة", "transliteration": "Al-Jumu'ah", "translation": "The Congregation, Friday", "verses": 11, "juz": 28, "page": 553, "type": "Medinan"},
+    63: {"name": "المنافقون", "transliteration": "Al-Munafiqun", "translation": "The Hypocrites", "verses": 11, "juz": 28, "page": 554, "type": "Medinan"},
+    64: {"name": "التغابن", "transliteration": "At-Taghabun", "translation": "The Mutual Disillusion", "verses": 18, "juz": 28, "page": 556, "type": "Medinan"},
+    65: {"name": "الطلاق", "transliteration": "At-Talaq", "translation": "The Divorce", "verses": 12, "juz": 28, "page": 558, "type": "Medinan"},
+    66: {"name": "التحريم", "transliteration": "At-Tahrim", "translation": "The Prohibition", "verses": 12, "juz": 28, "page": 560, "type": "Medinan"},
     67: {"name": "الملك", "transliteration": "Al-Mulk", "translation": "The Sovereignty", "verses": 30, "juz": 29, "page": 562, "type": "Meccan"},
+    68: {"name": "القلم", "transliteration": "Al-Qalam", "translation": "The Pen", "verses": 52, "juz": 29, "page": 564, "type": "Meccan"},
+    69: {"name": "الحاقة", "transliteration": "Al-Haqqah", "translation": "The Reality", "verses": 52, "juz": 29, "page": 566, "type": "Meccan"},
+    70: {"name": "المعارج", "transliteration": "Al-Ma'arij", "translation": "The Ascending Stairways", "verses": 44, "juz": 29, "page": 568, "type": "Meccan"},
+    71: {"name": "نوح", "transliteration": "Nuh", "translation": "Noah", "verses": 28, "juz": 29, "page": 570, "type": "Meccan"},
+    72: {"name": "الجن", "transliteration": "Al-Jinn", "translation": "The Jinn", "verses": 28, "juz": 29, "page": 572, "type": "Meccan"},
+    73: {"name": "المزمل", "transliteration": "Al-Muzzammil", "translation": "The Enshrouded One", "verses": 20, "juz": 29, "page": 574, "type": "Meccan"},
+    74: {"name": "المدثر", "transliteration": "Al-Muddaththir", "translation": "The Cloaked One", "verses": 56, "juz": 29, "page": 575, "type": "Meccan"},
+    75: {"name": "القيامة", "transliteration": "Al-Qiyamah", "translation": "The Resurrection", "verses": 40, "juz": 29, "page": 577, "type": "Meccan"},
+    76: {"name": "الانسان", "transliteration": "Al-Insan", "translation": "The Man", "verses": 31, "juz": 29, "page": 578, "type": "Medinan"},
+    77: {"name": "المرسلات", "transliteration": "Al-Mursalat", "translation": "The Emissaries", "verses": 50, "juz": 29, "page": 580, "type": "Meccan"},
+    78: {"name": "النبإ", "transliteration": "An-Naba", "translation": "The Tidings", "verses": 40, "juz": 30, "page": 582, "type": "Meccan"},
+    79: {"name": "النازعات", "transliteration": "An-Nazi'at", "translation": "Those who drag forth", "verses": 46, "juz": 30, "page": 583, "type": "Meccan"},
+    80: {"name": "عبس", "transliteration": "'Abasa", "translation": "He Frowned", "verses": 42, "juz": 30, "page": 585, "type": "Meccan"},
+    81: {"name": "التكوير", "transliteration": "At-Takwir", "translation": "The Overthrowing", "verses": 29, "juz": 30, "page": 586, "type": "Meccan"},
+    82: {"name": "الإنفطار", "transliteration": "Al-Infitar", "translation": "The Cleaving", "verses": 19, "juz": 30, "page": 587, "type": "Meccan"},
+    83: {"name": "المطففين", "transliteration": "Al-Mutaffifin", "translation": "The Defrauding", "verses": 36, "juz": 30, "page": 587, "type": "Meccan"},
+    84: {"name": "الإنشقاق", "transliteration": "Al-Inshiqaq", "translation": "The Sundering", "verses": 25, "juz": 30, "page": 589, "type": "Meccan"},
+    85: {"name": "البروج", "transliteration": "Al-Buruj", "translation": "The Mansions of the Stars", "verses": 22, "juz": 30, "page": 590, "type": "Meccan"},
+    86: {"name": "الطارق", "transliteration": "At-Tariq", "translation": "The Nightcommer", "verses": 17, "juz": 30, "page": 591, "type": "Meccan"},
+    87: {"name": "الأعلى", "transliteration": "Al-A'la", "translation": "The Most High", "verses": 19, "juz": 30, "page": 591, "type": "Meccan"},
+    88: {"name": "الغاشية", "transliteration": "Al-Ghashiyah", "translation": "The Overwhelming", "verses": 26, "juz": 30, "page": 592, "type": "Meccan"},
+    89: {"name": "الفجر", "transliteration": "Al-Fajr", "translation": "The Dawn", "verses": 30, "juz": 30, "page": 593, "type": "Meccan"},
+    90: {"name": "البلد", "transliteration": "Al-Balad", "translation": "The City", "verses": 20, "juz": 30, "page": 594, "type": "Meccan"},
+    91: {"name": "الشمس", "transliteration": "Ash-Shams", "translation": "The Sun", "verses": 15, "juz": 30, "page": 595, "type": "Meccan"},
+    92: {"name": "الليل", "transliteration": "Al-Layl", "translation": "The Night", "verses": 21, "juz": 30, "page": 595, "type": "Meccan"},
+    93: {"name": "الضحى", "transliteration": "Ad-Duhaa", "translation": "The Morning Hours", "verses": 11, "juz": 30, "page": 596, "type": "Meccan"},
+    94: {"name": "الشرح", "transliteration": "Ash-Sharh", "translation": "The Relief", "verses": 8, "juz": 30, "page": 596, "type": "Meccan"},
+    95: {"name": "التين", "transliteration": "At-Tin", "translation": "The Fig", "verses": 8, "juz": 30, "page": 597, "type": "Meccan"},
+    96: {"name": "العلق", "transliteration": "Al-'Alaq", "translation": "The Clot", "verses": 19, "juz": 30, "page": 597, "type": "Meccan"},
+    97: {"name": "القدر", "transliteration": "Al-Qadr", "translation": "The Power", "verses": 5, "juz": 30, "page": 598, "type": "Meccan"},
+    98: {"name": "البينة", "transliteration": "Al-Bayyinah", "translation": "The Clear Proof", "verses": 8, "juz": 30, "page": 598, "type": "Medinan"},
+    99: {"name": "الزلزلة", "transliteration": "Az-Zalzalah", "translation": "The Earthquake", "verses": 8, "juz": 30, "page": 599, "type": "Medinan"},
+    100: {"name": "العاديات", "transliteration": "Al-'Adiyat", "translation": "The Courser", "verses": 11, "juz": 30, "page": 599, "type": "Meccan"},
+    101: {"name": "القارعة", "transliteration": "Al-Qari'ah", "translation": "The Calamity", "verses": 11, "juz": 30, "page": 600, "type": "Meccan"},
+    102: {"name": "التكاثر", "transliteration": "At-Takathur", "translation": "The Rivalry in world increase", "verses": 8, "juz": 30, "page": 600, "type": "Meccan"},
+    103: {"name": "العصر", "transliteration": "Al-'Asr", "translation": "The Declining Day", "verses": 3, "juz": 30, "page": 601, "type": "Meccan"},
+    104: {"name": "الهمزة", "transliteration": "Al-Humazah", "translation": "The Traducer", "verses": 9, "juz": 30, "page": 601, "type": "Meccan"},
+    105: {"name": "الفيل", "transliteration": "Al-Fil", "translation": "The Elephant", "verses": 5, "juz": 30, "page": 601, "type": "Meccan"},
+    106: {"name": "قريش", "transliteration": "Quraysh", "translation": "Quraysh", "verses": 4, "juz": 30, "page": 602, "type": "Meccan"},
+    107: {"name": "الماعون", "transliteration": "Al-Ma'un", "translation": "The Small kindnesses", "verses": 7, "juz": 30, "page": 602, "type": "Meccan"},
+    108: {"name": "الكوثر", "transliteration": "Al-Kawthar", "translation": "The Abundance", "verses": 3, "juz": 30, "page": 602, "type": "Meccan"},
+    109: {"name": "الكافرون", "transliteration": "Al-Kafirun", "translation": "The Disbelievers", "verses": 6, "juz": 30, "page": 603, "type": "Meccan"},
+    110: {"name": "النصر", "transliteration": "An-Nasr", "translation": "The Divine Support", "verses": 3, "juz": 30, "page": 603, "type": "Medinan"},
+    111: {"name": "المسد", "transliteration": "Al-Masad", "translation": "The Palm Fiber", "verses": 5, "juz": 30, "page": 603, "type": "Meccan"},
     112: {"name": "الإخلاص", "transliteration": "Al-Ikhlas", "translation": "The Sincerity", "verses": 4, "juz": 30, "page": 604, "type": "Meccan"},
     113: {"name": "الفلق", "transliteration": "Al-Falaq", "translation": "The Daybreak", "verses": 5, "juz": 30, "page": 604, "type": "Meccan"},
     114: {"name": "الناس", "transliteration": "An-Nas", "translation": "Mankind", "verses": 6, "juz": 30, "page": 604, "type": "Meccan"},
@@ -211,16 +271,32 @@ def tool_bookmark_current(args):
     surah_num = status.get("surahNumber", 1)
     pos_ms = status.get("position", 0)
     dur_ms = status.get("duration", 0)
-    meta = SURAH_METADATA.get(surah_num, {"transliteration": f"Surah {surah_num}", "verses": 100, "page": 1})
+    reciter_id = status.get("reciterId", "ar.alafasy")
+    reciter_label = status.get("reciterLabel", reciter_id)
+    meta = SURAH_METADATA.get(surah_num, {
+        "name": "",
+        "transliteration": f"Surah {surah_num}",
+        "verses": 100,
+        "juz": 1,
+        "page": 1,
+    })
     ayah = estimate_current_ayah(surah_num, pos_ms, dur_ms)
 
     bookmark = {
+        "id": str(int(time.time() * 1000)),
         "surah": surah_num,
         "surahName": meta["transliteration"],
+        "surahArabic": meta.get("name", ""),
         "ayah": ayah,
+        "totalVerses": meta.get("verses", 100),
+        "juz": meta.get("juz", 1),
         "page": meta.get("page", 1),
-        "note": note,
-        "timestamp_ms": pos_ms
+        "reciterId": reciter_id,
+        "reciter": reciter_label,
+        "timestamp_ms": pos_ms,
+        "duration_ms": dur_ms,
+        "note": note or f"Ayah {ayah}",
+        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 
     BOOKMARKS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -232,9 +308,11 @@ def tool_bookmark_current(args):
         except Exception:
             bookmarks = []
 
-    bookmarks.append(bookmark)
-    with open(BOOKMARKS_FILE, "w") as f:
+    bookmarks.insert(0, bookmark)
+    tmp_file = BOOKMARKS_FILE.with_suffix(".json.tmp")
+    with open(tmp_file, "w") as f:
         json.dump(bookmarks, f, indent=2)
+    os.replace(tmp_file, BOOKMARKS_FILE)
 
     return {"saved": True, "bookmark": bookmark}
 

@@ -259,8 +259,10 @@ func runSyncOrLogin(args []string, forceLogin bool, stdout, stderr io.Writer) in
 			}
 			stateDir = args[i+1]
 			i++
-		case "--interactive", "-i":
+		case "--interactive", "-i", "--login-browser":
 			interactive = true
+		case "--pull":
+			// Default sync behavior pulls remote bookmarks; accepted for CLI compatibility.
 		case "--client-id":
 			if i+1 >= len(args) {
 				fmt.Fprintln(stderr, "quranctl: --client-id requires a value")
@@ -357,8 +359,10 @@ func hasValidCredentials(cfg AuthConfig) bool {
 	if cfg.Mode == "oauth2" && cfg.ClientID != "" && (cfg.AccessToken != "" || cfg.RefreshToken != "") {
 		return true
 	}
-	if len(cfg.Cookies) > 0 && (cfg.Cookies["at"] != "" || cfg.Cookies["rt"] != "") {
-		return true
+	for _, v := range cfg.Cookies {
+		if strings.TrimSpace(v) != "" {
+			return true
+		}
 	}
 	return false
 }
@@ -422,32 +426,17 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-func runInteractiveLogin(ctx context.Context, cfg AuthConfig, provider string, stderr io.Writer) (AuthConfig, error) {
-	ln, err := net.Listen("tcp", defaultCallbackAddr)
-	if err != nil {
-		return cfg, fmt.Errorf("listen on %s: %w", defaultCallbackAddr, err)
-	}
-	defer ln.Close()
-
-	callbackURL := "http://" + ln.Addr().String() + "/callback"
-	loginURL := "http://" + ln.Addr().String() + "/login"
-
-	pkceVerifier, pkceChallenge, err := generatePKCE()
-	if err != nil {
-		return cfg, err
-	}
-	stateTok, err := randomHex(16)
-	if err != nil {
-		return cfg, err
-	}
-	nonceTok, err := randomHex(16)
-	if err != nil {
-		return cfg, err
-	}
-
-	resultCh := make(chan AuthConfig, 1)
-	errCh := make(chan error, 1)
-
+func buildLoginMux(
+	cfg AuthConfig,
+	provider string,
+	callbackURL string,
+	stateTok string,
+	nonceTok string,
+	pkceVerifier string,
+	pkceChallenge string,
+	resultCh chan<- AuthConfig,
+	errCh chan<- error,
+) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		if cfg.Mode == "oauth2" && cfg.ClientID != "" {
@@ -472,9 +461,10 @@ func runInteractiveLogin(ctx context.Context, cfg AuthConfig, provider string, s
 		_, _ = io.WriteString(w, renderLoginHTML())
 	})
 
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	handleCallback := func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		// 1. Quran.com Social Login Redirect Token flow (?token=...)
+		// Quran.com's auth backend redirects back to /auth?token=<JWT> (or /callback?token=<JWT>).
 		if redirectTok := q.Get("token"); redirectTok != "" {
 			cookies, err := exchangeQuranComRedirectToken(r.Context(), redirectTok)
 			if err != nil {
@@ -526,7 +516,53 @@ func runInteractiveLogin(ctx context.Context, cfg AuthConfig, provider string, s
 		}
 
 		http.Error(w, "Missing token or code in callback", http.StatusBadRequest)
+	}
+
+	mux.HandleFunc("/callback", handleCallback)
+	mux.HandleFunc("/auth", handleCallback)
+	mux.HandleFunc("/auth/", handleCallback)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("token") != "" || q.Get("code") != "" {
+			handleCallback(w, r)
+			return
+		}
+		if r.URL.Path == "/" || r.URL.Path == "" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
 	})
+	return mux
+}
+
+func runInteractiveLogin(ctx context.Context, cfg AuthConfig, provider string, stderr io.Writer) (AuthConfig, error) {
+	ln, err := net.Listen("tcp", defaultCallbackAddr)
+	if err != nil {
+		return cfg, fmt.Errorf("listen on %s: %w", defaultCallbackAddr, err)
+	}
+	defer ln.Close()
+
+	callbackURL := "http://" + ln.Addr().String() + "/callback"
+	loginURL := "http://" + ln.Addr().String() + "/login"
+
+	pkceVerifier, pkceChallenge, err := generatePKCE()
+	if err != nil {
+		return cfg, err
+	}
+	stateTok, err := randomHex(16)
+	if err != nil {
+		return cfg, err
+	}
+	nonceTok, err := randomHex(16)
+	if err != nil {
+		return cfg, err
+	}
+
+	resultCh := make(chan AuthConfig, 1)
+	errCh := make(chan error, 1)
+
+	mux := buildLoginMux(cfg, provider, callbackURL, stateTok, nonceTok, pkceVerifier, pkceChallenge, resultCh, errCh)
 
 	srv := &http.Server{
 		Handler:           mux,
@@ -559,6 +595,27 @@ func runInteractiveLogin(ctx context.Context, cfg AuthConfig, provider string, s
 	}
 }
 
+func extractRefreshTokenFromJWT(jwtStr string) string {
+	parts := strings.Split(jwtStr, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return ""
+		}
+	}
+	var claims struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.RefreshToken)
+}
+
 func exchangeQuranComRedirectToken(ctx context.Context, redirectToken string) (map[string]string, error) {
 	client := newSyncHTTPClient()
 	endpoint := fmt.Sprintf("%s/api/proxy/auth/tokens/redirectToken?token=%s", quranComBaseURL, url.QueryEscape(redirectToken))
@@ -584,7 +641,17 @@ func exchangeQuranComRedirectToken(ctx context.Context, redirectToken string) (m
 			cookies[c.Name] = c.Value
 		}
 	}
-	if cookies["at"] == "" && cookies["rt"] == "" {
+	if cookies["rt"] == "" {
+		if rt := extractRefreshTokenFromJWT(redirectToken); rt != "" {
+			cookies["rt"] = rt
+		}
+	}
+	if cookies["at"] == "" && cookies["rt"] != "" {
+		if refreshed, err := refreshQuranComWebCookies(ctx, cookies); err == nil {
+			cookies = refreshed
+		}
+	}
+	if len(cookies) == 0 {
 		return nil, errors.New("no session cookies returned from redirectToken")
 	}
 	return cookies, nil
@@ -843,7 +910,7 @@ func fetchRemoteBookmarksWithRefresh(ctx context.Context, cfg AuthConfig) ([]rem
 	}
 
 	bms, status, err := fetchWebProxyBookmarks(ctx, cfg.Cookies)
-	if (status == http.StatusUnauthorized || status == http.StatusForbidden) && cfg.Cookies["rt"] != "" {
+	if (status == http.StatusUnauthorized || status == http.StatusForbidden) && len(cfg.Cookies) > 0 {
 		refreshedCookies, rErr := refreshQuranComWebCookies(ctx, cfg.Cookies)
 		if rErr != nil {
 			return nil, cfg, rErr
@@ -858,7 +925,7 @@ func fetchWebProxyBookmarks(ctx context.Context, cookies map[string]string) ([]r
 	client := newSyncHTTPClient()
 	var all []remoteBookmark
 
-	// 1. Saved + Reading bookmarks from /api/proxy/auth/bookmarks?mushafId=1
+	// 1. Primary saved bookmarks check (mushafId=1 also validates session auth status)
 	bmsURL := quranComBaseURL + "/api/proxy/auth/bookmarks?mushafId=1"
 	body, status, err := doGetWithCookies(ctx, client, bmsURL, cookies)
 	if err != nil {
@@ -870,19 +937,84 @@ func fetchWebProxyBookmarks(ctx context.Context, cookies map[string]string) ([]r
 	}
 	all = append(all, parsed...)
 
-	// 2. Also check /api/proxy/auth/reading-bookmarks?mushafId=1
-	readingURL := quranComBaseURL + "/api/proxy/auth/reading-bookmarks?mushafId=1"
-	if rBody, rStatus, rErr := doGetWithCookies(ctx, client, readingURL, cookies); rErr == nil && rStatus == http.StatusOK {
-		if rParsed, pErr := parseBookmarksPayload(rBody); pErr == nil {
-			for i := range rParsed {
-				t := true
-				rParsed[i].IsReading = &t
+	// 2. Quran.com's default font (MadaniV1) uses mushafId=2, and other fonts use 4 (Uthmani),
+	// 5 (QPC Hafs), 19 (Tajweed V4), 6/7 (IndoPak). Query these Mushaf IDs as well.
+	for _, mID := range []int{2, 4, 5, 19, 6, 7} {
+		u := fmt.Sprintf("%s/api/proxy/auth/bookmarks?mushafId=%d&type=ayah&limit=50", quranComBaseURL, mID)
+		if mBody, mStatus, mErr := doGetWithCookies(ctx, client, u, cookies); mErr == nil && mStatus == http.StatusOK {
+			if mParsed, pErr := parseBookmarksPayload(mBody); pErr == nil {
+				all = append(all, mParsed...)
 			}
-			all = append(all, rParsed...)
 		}
 	}
 
-	return deduplicateRemoteBookmarks(all), http.StatusOK, nil
+	// 3. Reading bookmark endpoints on Quran.com web proxy:
+	// Quran.com's getReadingBookmark() calls /api/proxy/auth/bookmarks?mushafId=<id>&limit=1&isReading=true
+	// (which can return a single Bookmark JSON object or an array).
+	readingURLs := []string{
+		quranComBaseURL + "/api/proxy/auth/bookmarks?mushafId=2&limit=1&isReading=true",
+		quranComBaseURL + "/api/proxy/auth/bookmarks?mushafId=1&limit=1&isReading=true",
+		quranComBaseURL + "/api/proxy/auth/bookmarks?mushafId=4&limit=1&isReading=true",
+		quranComBaseURL + "/api/proxy/auth/bookmarks?mushafId=5&limit=1&isReading=true",
+		quranComBaseURL + "/api/proxy/auth/bookmarks?mushafId=19&limit=1&isReading=true",
+		quranComBaseURL + "/api/proxy/auth/reading-bookmarks?mushafId=2",
+		quranComBaseURL + "/api/proxy/auth/reading-bookmarks?mushafId=1",
+	}
+	for _, readingURL := range readingURLs {
+		if rBody, rStatus, rErr := doGetWithCookies(ctx, client, readingURL, cookies); rErr == nil && rStatus == http.StatusOK {
+			if rParsed, pErr := parseBookmarksPayload(rBody); pErr == nil {
+				for i := range rParsed {
+					t := true
+					rParsed[i].IsReading = &t
+				}
+				all = append(all, rParsed...)
+			}
+		}
+	}
+
+	// 4. Collections ("Favorites" and custom collections on Quran.com)
+	collectionsAllURL := quranComBaseURL + "/api/proxy/auth/collections/all?type=ayah&limit=50"
+	if cBody, cStatus, cErr := doGetWithCookies(ctx, client, collectionsAllURL, cookies); cErr == nil && cStatus == http.StatusOK {
+		if cParsed, pErr := parseBookmarksPayload(cBody); pErr == nil {
+			all = append(all, cParsed...)
+		}
+	}
+	collectionsListURL := quranComBaseURL + "/api/proxy/auth/collections?type=ayah&limit=20"
+	if clBody, clStatus, clErr := doGetWithCookies(ctx, client, collectionsListURL, cookies); clErr == nil && clStatus == http.StatusOK {
+		for _, colID := range parseCollectionIDs(clBody) {
+			colURL := fmt.Sprintf("%s/api/proxy/auth/collections/%s?type=ayah&limit=50", quranComBaseURL, url.PathEscape(colID))
+			if cbBody, cbStatus, cbErr := doGetWithCookies(ctx, client, colURL, cookies); cbErr == nil && cbStatus == http.StatusOK {
+				if cbParsed, pErr := parseBookmarksPayload(cbBody); pErr == nil {
+					all = append(all, cbParsed...)
+				}
+			}
+		}
+	}
+
+	// 5. Pinned verses (/api/proxy/auth/pinned-items?targetType=ayah)
+	pinnedURL := quranComBaseURL + "/api/proxy/auth/pinned-items?targetType=ayah"
+	if pBody, pStatus, pErr := doGetWithCookies(ctx, client, pinnedURL, cookies); pErr == nil && pStatus == http.StatusOK {
+		if pParsed, pErr := parseBookmarksPayload(pBody); pErr == nil {
+			all = append(all, pParsed...)
+		}
+	}
+
+	// 6. Fallback to recent reading sessions if user has no explicit bookmarks/collections/pins
+	deduped := deduplicateRemoteBookmarks(all)
+	if len(deduped) == 0 {
+		sessionsURL := quranComBaseURL + "/api/proxy/auth/reading-sessions"
+		if sBody, sStatus, sErr := doGetWithCookies(ctx, client, sessionsURL, cookies); sErr == nil && sStatus == http.StatusOK {
+			if sParsed, pErr := parseBookmarksPayload(sBody); pErr == nil {
+				for i := range sParsed {
+					t := true
+					sParsed[i].IsReading = &t
+				}
+				deduped = deduplicateRemoteBookmarks(sParsed)
+			}
+		}
+	}
+
+	return deduped, http.StatusOK, nil
 }
 
 func fetchOAuth2Bookmarks(ctx context.Context, cfg AuthConfig) ([]remoteBookmark, int, error) {
@@ -900,14 +1032,25 @@ func fetchOAuth2Bookmarks(ctx context.Context, cfg AuthConfig) ([]remoteBookmark
 	}
 	all = append(all, parsed...)
 
-	readingURL := qfAPIBaseURL + "/auth/v1/reading-bookmarks?mushafId=1"
-	if rBody, rStatus, rErr := doGetWithOAuth2(ctx, client, readingURL, cfg); rErr == nil && rStatus == http.StatusOK {
-		if rParsed, pErr := parseBookmarksPayload(rBody); pErr == nil {
-			for i := range rParsed {
-				t := true
-				rParsed[i].IsReading = &t
+	for _, mID := range []int{2, 4, 5, 19} {
+		u := fmt.Sprintf("%s/auth/v1/bookmarks?mushafId=%d&type=ayah&first=50", qfAPIBaseURL, mID)
+		if mBody, mStatus, mErr := doGetWithOAuth2(ctx, client, u, cfg); mErr == nil && mStatus == http.StatusOK {
+			if mParsed, pErr := parseBookmarksPayload(mBody); pErr == nil {
+				all = append(all, mParsed...)
 			}
-			all = append(all, rParsed...)
+		}
+	}
+
+	for _, mID := range []int{2, 1} {
+		readingURL := fmt.Sprintf("%s/auth/v1/reading-bookmarks?mushafId=%d", qfAPIBaseURL, mID)
+		if rBody, rStatus, rErr := doGetWithOAuth2(ctx, client, readingURL, cfg); rErr == nil && rStatus == http.StatusOK {
+			if rParsed, pErr := parseBookmarksPayload(rBody); pErr == nil {
+				for i := range rParsed {
+					t := true
+					rParsed[i].IsReading = &t
+				}
+				all = append(all, rParsed...)
+			}
 		}
 	}
 
@@ -984,37 +1127,213 @@ func setQuranComHeaders(req *http.Request, cookies map[string]string) {
 	}
 }
 
+type rawBookmarkItem struct {
+	ID            string           `json:"id"`
+	CreatedAt     string           `json:"createdAt"`
+	UpdatedAt     string           `json:"updatedAt"`
+	Type          string           `json:"type"`
+	Key           int              `json:"key"`
+	VerseNumber   int              `json:"verseNumber"`
+	ChapterNumber int              `json:"chapterNumber"`
+	VerseKey      string           `json:"verseKey"`
+	TargetType    string           `json:"targetType"`
+	TargetID      string           `json:"targetId"`
+	IsReading     *bool            `json:"isReading"`
+	Bookmark      *rawBookmarkItem `json:"bookmark"`
+}
+
+func (r rawBookmarkItem) toRemoteBookmark() (remoteBookmark, bool) {
+	item := r
+	if item.Bookmark != nil && (item.Key == 0 && item.ChapterNumber == 0 && item.TargetID == "") {
+		item = *item.Bookmark
+		if item.ID == "" {
+			item.ID = r.ID
+		}
+		if item.CreatedAt == "" {
+			item.CreatedAt = r.CreatedAt
+		}
+	}
+
+	out := remoteBookmark{
+		ID:          item.ID,
+		CreatedAt:   item.CreatedAt,
+		UpdatedAt:   item.UpdatedAt,
+		Type:        strings.ToLower(strings.TrimSpace(item.Type)),
+		Key:         item.Key,
+		VerseNumber: item.VerseNumber,
+		IsReading:   item.IsReading,
+	}
+
+	// ReadingSession shape: {chapterNumber: 18, verseNumber: 10, updatedAt: "..."}
+	if out.Key == 0 && item.ChapterNumber >= 1 && item.ChapterNumber <= 114 {
+		out.Key = item.ChapterNumber
+		if out.Type == "" {
+			out.Type = "ayah"
+		}
+	}
+
+	// PinnedItemDTO shape: {targetType: "ayah", targetId: "2:255"} or verseKey: "2:255"
+	vk := strings.TrimSpace(item.VerseKey)
+	if vk == "" && (strings.EqualFold(item.TargetType, "ayah") || strings.Contains(item.TargetID, ":")) {
+		vk = strings.TrimSpace(item.TargetID)
+	}
+	if out.Key == 0 && vk != "" {
+		if s, a, ok := parseVerseKeyPair(vk); ok {
+			out.Key = s
+			out.VerseNumber = a
+			out.Type = "ayah"
+		}
+	}
+
+	// Page bookmark shape: {type: "page", key: <1..604>}
+	if out.Type == "page" && out.Key >= 1 && out.Key <= 604 {
+		out.Key = pageToSurah(out.Key)
+		out.VerseNumber = 1
+		out.Type = "ayah"
+	}
+
+	if out.Key < 1 || out.Key > 114 {
+		return remoteBookmark{}, false
+	}
+	if out.Type != "" && out.Type != "ayah" {
+		return remoteBookmark{}, false
+	}
+	if out.VerseNumber < 1 {
+		out.VerseNumber = 1
+	}
+	return out, true
+}
+
+func parseVerseKeyPair(vk string) (int, int, bool) {
+	parts := strings.SplitN(strings.TrimSpace(vk), ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	s, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	a, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || s < 1 || s > 114 || a < 1 {
+		return 0, 0, false
+	}
+	return s, a, true
+}
+
+func pageToSurah(page int) int {
+	best := 1
+	for s := 1; s <= 114; s++ {
+		if surahMetadata[s].Page <= page {
+			best = s
+		} else {
+			break
+		}
+	}
+	return best
+}
+
+func convertRawItems(rawList []rawBookmarkItem) []remoteBookmark {
+	var out []remoteBookmark
+	for _, item := range rawList {
+		if rb, ok := item.toRemoteBookmark(); ok {
+			out = append(out, rb)
+		}
+	}
+	return out
+}
+
+func parseCollectionIDs(body []byte) []string {
+	var env struct {
+		Data []struct {
+			ID             string `json:"id"`
+			BookmarksCount int    `json:"bookmarksCount"`
+			Count          int    `json:"count"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil
+	}
+	var ids []string
+	for _, c := range env.Data {
+		if c.ID != "" && (c.BookmarksCount > 0 || c.Count > 0) {
+			ids = append(ids, c.ID)
+			if len(ids) >= 10 {
+				break
+			}
+		}
+	}
+	return ids
+}
+
 func parseBookmarksPayload(body []byte) ([]remoteBookmark, error) {
 	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "" {
+	if trimmed == "" || trimmed == "null" || trimmed == "{}" {
 		return nil, nil
 	}
 	if strings.HasPrefix(trimmed, "[") {
-		var list []remoteBookmark
+		var list []rawBookmarkItem
 		if err := json.Unmarshal(body, &list); err != nil {
 			return nil, err
 		}
-		return list, nil
+		return convertRawItems(list), nil
 	}
+
 	var env struct {
-		Data json.RawMessage `json:"data"`
+		Data      json.RawMessage   `json:"data"`
+		Bookmarks []rawBookmarkItem `json:"bookmarks"`
+		Bookmark  *rawBookmarkItem  `json:"bookmark"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, err
 	}
-	dataTrim := strings.TrimSpace(string(env.Data))
-	if strings.HasPrefix(dataTrim, "[") {
-		var list []remoteBookmark
-		if err := json.Unmarshal(env.Data, &list); err != nil {
-			return nil, err
+	if len(env.Bookmarks) > 0 {
+		return convertRawItems(env.Bookmarks), nil
+	}
+	if env.Bookmark != nil {
+		if rb, ok := env.Bookmark.toRemoteBookmark(); ok {
+			return []remoteBookmark{rb}, nil
 		}
-		return list, nil
 	}
-	var nested struct {
-		Bookmarks []remoteBookmark `json:"bookmarks"`
+
+	dataTrim := strings.TrimSpace(string(env.Data))
+	if dataTrim != "" && dataTrim != "null" {
+		if strings.HasPrefix(dataTrim, "[") {
+			var list []rawBookmarkItem
+			if err := json.Unmarshal(env.Data, &list); err != nil {
+				return nil, err
+			}
+			return convertRawItems(list), nil
+		}
+		var nested struct {
+			Bookmarks []rawBookmarkItem `json:"bookmarks"`
+			Data      []rawBookmarkItem `json:"data"`
+			Bookmark  *rawBookmarkItem  `json:"bookmark"`
+		}
+		if err := json.Unmarshal(env.Data, &nested); err == nil {
+			if nested.Bookmarks != nil {
+				return convertRawItems(nested.Bookmarks), nil
+			}
+			if nested.Data != nil {
+				return convertRawItems(nested.Data), nil
+			}
+			if nested.Bookmark != nil {
+				if rb, ok := nested.Bookmark.toRemoteBookmark(); ok {
+					return []remoteBookmark{rb}, nil
+				}
+			}
+		}
+		var singleInData rawBookmarkItem
+		if err := json.Unmarshal(env.Data, &singleInData); err == nil {
+			if rb, ok := singleInData.toRemoteBookmark(); ok {
+				return []remoteBookmark{rb}, nil
+			}
+		}
+		return nil, nil
 	}
-	if err := json.Unmarshal(env.Data, &nested); err == nil && nested.Bookmarks != nil {
-		return nested.Bookmarks, nil
+
+	// Single top-level bookmark object (e.g. GET /api/proxy/auth/bookmarks?mushafId=2&limit=1&isReading=true)
+	var single rawBookmarkItem
+	if err := json.Unmarshal(body, &single); err == nil {
+		if rb, ok := single.toRemoteBookmark(); ok {
+			return []remoteBookmark{rb}, nil
+		}
 	}
 	return nil, nil
 }

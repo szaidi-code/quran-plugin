@@ -54,10 +54,14 @@ highlighted surah or selects the reciter, and `Esc` closes it.
 omarchy plugin add https://github.com/szaidi-code/quran-plugin.git --enable
 ```
 
-Then install the audio engine. This downloads the archive for a pinned,
-immutable release tag and verifies it against SHA-256 digests committed in
-this repository (`checksums/<tag>.sha256`) before extracting it. Installation
-fails closed if those digests are missing or do not match:
+On first launch, the plugin automatically runs `install.sh` to install the audio
+engine into `~/.local/bin` and start the local streaming daemon. `install.sh`
+downloads the archive for a pinned, immutable release tag and verifies it
+against SHA-256 digests committed in this repository (`checksums/<tag>.sha256`)
+before extracting it; installation fails closed if those digests are missing or
+do not match.
+
+You can also run the installer manually at any time:
 
 ```sh
 ./install.sh
@@ -68,8 +72,6 @@ fails closed if those digests are missing or do not match:
 ```sh
 ./install.sh --build
 ```
-
-Then restart your Omarchy shell.
 
 ## Uninstall
 

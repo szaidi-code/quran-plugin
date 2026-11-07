@@ -957,12 +957,13 @@ BarWidget {
                             Column {
                                 width: parent.width
                                 spacing: Style.space(4)
-                                visible: quranService && (quranService.errorMessage !== "" || quranService.recitersLoading)
+                                visible: quranService && (quranService.errorMessage !== "" || quranService.recitersLoading || quranService.installingEngine)
 
                                 Text {
                                     width: parent.width
                                     visible: quranService && quranService.errorMessage !== ""
                                     text: quranService ? quranService.errorMessage : ""
+                                    textFormat: Text.PlainText
                                     color: root.barUrgent
                                     font.family: root.barFontFamily
                                     font.pixelSize: Style.font.bodySmall
@@ -991,8 +992,19 @@ BarWidget {
 
                                 Text {
                                     width: parent.width
+                                    visible: quranService && quranService.installingEngine
+                                    text: root.tr("installingEngine")
+                                    textFormat: Text.PlainText
+                                    color: root.mutedC
+                                    font.family: root.barFontFamily
+                                    font.pixelSize: Style.font.caption
+                                }
+
+                                Text {
+                                    width: parent.width
                                     visible: quranService && quranService.recitersLoading
                                     text: root.tr("loadingReciters")
+                                    textFormat: Text.PlainText
                                     color: root.mutedC
                                     font.family: root.barFontFamily
                                     font.pixelSize: Style.font.caption

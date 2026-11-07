@@ -98,13 +98,18 @@ Item {
     property string downloadReciter: ""   // reciter currently being downloaded
     property var lastDownload: null       // { id, surah } for retry after failure
     // The audio engine is the Go quranproxyd daemon + quranctl CLI. Their paths
-    // are resolved once at startup (onToolProbe): a prebuilt binary in the
-    // plugin folder wins (from install.sh or manual placement), then the
-    // user-installed ~/.local/bin copy. When neither exists, setupRequired
-    // turns on and the engine actions fail with a "run install.sh" hint
-    // instead of silently breaking.
+    // are resolved at startup (probeTools -> onToolProbe): a prebuilt binary in
+    // the plugin folder wins, then the user-installed ~/.local/bin copy. When
+    // missing or outdated, Service.qml automatically runs install.sh once to
+    // download and verify the pinned release archive; if that fails, setupRequired
+    // turns on and Retry re-runs the installer.
+    readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/szaidi.quran"
+    readonly property string installScript: root.pluginDir + "/install.sh"
     property string quranctlBinary: ""
     property bool setupRequired: false
+    property bool installingEngine: false
+    property bool autoInstallAttempted: false
+    property var pendingEnginePlay: null
     readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
 
     // --- local range-caching proxy (quranproxyd) ---
@@ -460,6 +465,19 @@ Item {
     function _playSurahOrDownload(id, n, autoplay, positionMs) {
         var shouldPlay = autoplay !== false;
         var resumeMs = positionMs || 0;
+        if (!root.quranctlBinary || !root.proxyBinary) {
+            if (toolProbeProc.running || installEngineProc.running || !root.autoInstallAttempted) {
+                root.pendingEnginePlay = {
+                    id: id,
+                    n: n,
+                    autoplay: shouldPlay,
+                    positionMs: resumeMs
+                };
+                if (!toolProbeProc.running && !installEngineProc.running)
+                    root.probeTools();
+                return;
+            }
+        }
         if (root.isSurahDownloaded(id, n)) {
             root.requestLocalValidation(id, n, shouldPlay, resumeMs);
             return;
@@ -793,7 +811,7 @@ Item {
     // --- resume-on-startup (load paused at the saved position) ---
 
     function _maybeResume() {
-        if (!root.stateLoaded || !root.mpvReady)
+        if (!root.stateLoaded || !root.mpvReady || !root.quranctlBinary)
             return;
         if (root.lastSource !== "")
             return;
@@ -1128,11 +1146,27 @@ Item {
 
     // --- quranproxyd lifecycle + events ---------------------------------------
 
-    // Locate the audio-engine binaries once, at startup. The probe prefers a
-    // prebuilt binary inside the plugin folder (from install.sh or manual
-    // placement), then a user-installed copy in ~/.local/bin. Any binary not
-    // found flips setupRequired so engine actions show a clear setup hint
-    // instead of failing silently.
+    // Locate the audio-engine binaries at startup (and after auto-install or
+    // Retry). The probe prefers a prebuilt binary inside the plugin folder,
+    // then a user-installed copy in ~/.local/bin. When missing, Service.qml
+    // runs install.sh automatically once before surfacing setupRequired.
+    function probeTools() {
+        if (toolProbeProc.running || root.shuttingDown)
+            return;
+        toolProbeProc.command = ["bash", "-c", 'arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) arch="";; esac;' + ' plugin="$HOME/.config/omarchy/plugins/szaidi.quran/prebuilt/linux-$arch";' + ' for b in quranproxyd quranctl; do c="";' + '   [ -n "$arch" ] && [ -x "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -x "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   if [ "$b" = "quranctl" ] && [ -n "$c" ]; then ("$c" 2>&1 || true) | grep -q "navigate" || c=""; fi;' + '   [ -n "$c" ] && echo "$b $c"; done'];
+        toolProbeProc.running = true;
+    }
+
+    function installEngine() {
+        if (installEngineProc.running || root.shuttingDown)
+            return;
+        root.installingEngine = true;
+        root.setupRequired = false;
+        root.errorMessage = "";
+        installEngineProc.command = ["bash", root.installScript];
+        installEngineProc.running = true;
+    }
+
     function onToolProbe(out) {
         var found = {};
         var lines = String(out || "").split("\n");
@@ -1142,17 +1176,31 @@ Item {
                 found[parts[0]] = parts[1];
             }
         }
-        if (found["quranproxyd"])
-            root.proxyBinary = found["quranproxyd"];
-        if (found["quranctl"])
-            root.quranctlBinary = found["quranctl"];
-        root.setupRequired = !found["quranproxyd"] || !found["quranctl"];
-        if (root.setupRequired) {
+        root.proxyBinary = found["quranproxyd"] || "";
+        root.quranctlBinary = found["quranctl"] || "";
+        var missing = !root.proxyBinary || !root.quranctlBinary;
+        if (missing) {
+            if (!root.autoInstallAttempted && !installEngineProc.running) {
+                root.autoInstallAttempted = true;
+                root.installEngine();
+                return;
+            }
+            root.setupRequired = true;
             root.errorMessage = Model.tr(root.language, "setupRequired");
         } else {
+            root.setupRequired = false;
+            if (root.errorMessage === Model.tr(root.language, "setupRequired"))
+                root.errorMessage = "";
             // Binaries are resolved now; start the streaming daemon. (Component
             // onCompleted must not call _startProxy before the probe lands.)
             root._startProxy();
+            if (root.stateLoaded) {
+                root._resumeInterruptedDownload();
+                root._maybeResume();
+            }
+            if (root.pendingEnginePlay) {
+                pendingEnginePlayTimer.restart();
+            }
         }
     }
 
@@ -1225,6 +1273,12 @@ Item {
         root.proxyPort = port;
         root.proxyToken = tok;
         root.proxyReady = true;
+        if (root.pendingEnginePlay) {
+            pendingEnginePlayTimer.stop();
+            var p = root.pendingEnginePlay;
+            root.pendingEnginePlay = null;
+            root._playSurahOrDownload(p.id, p.n, p.autoplay, p.positionMs);
+        }
     }
 
     // The socket path is trusted only when it is absolute and lives under
@@ -1304,6 +1358,11 @@ Item {
     // catalog is empty is pointless because there is nothing to list/validate.)
     function retry() {
         root.errorMessage = "";
+        if (root.setupRequired || !root.proxyBinary || !root.quranctlBinary) {
+            root.autoInstallAttempted = false;
+            root.probeTools();
+            return;
+        }
         if (root.catalogError || root.reciters.length === 0) {
             root.catalogError = false;
             root.fetchReciters();
@@ -1767,6 +1826,8 @@ Item {
     // _maybeResume may also preempt the mushaf with the user's last surah via
     // the normal play path.
     function _resumeInterruptedDownload() {
+        if (!root.quranctlBinary)
+            return;
         if (root.downloadResumeTried)
             return;
         root.downloadResumeTried = true;
@@ -1820,16 +1881,17 @@ Item {
         root.fetchReciters();
         sockCleanProc.running = true;
         mprisFindProc.running = true;
-        // Resolve the audio-engine binaries first; _startProxy is a no-op until
-        // they are found (or setupRequired is set).
-        toolProbeProc.command = ["bash", "-c", 'arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) arch="";; esac;' + ' plugin="$HOME/.config/omarchy/plugins/szaidi.quran/prebuilt/linux-$arch";' + ' for b in quranproxyd quranctl; do c="";' + '   [ -n "$arch" ] && [ -x "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -x "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   [ -n "$c" ] && echo "$b $c"; done'];
-        toolProbeProc.running = true;
+        // Resolve the audio-engine binaries first (auto-installing via
+        // install.sh if missing); _startProxy runs once they are found.
+        root.probeTools();
     }
 
     Component.onDestruction: {
         root.shuttingDown = true;
         mpvConnectTimer.stop();
         proxyRestartTimer.stop();
+        pendingEnginePlayTimer.stop();
+        installEngineProc.running = false;
         proxyProc.running = false;
         if (root.mpvSock) {
             root.mpvSock.connected = false;
@@ -2256,13 +2318,51 @@ Item {
     }
 
     // One-shot startup probe that locates the audio-engine binaries (see
-    // Component.onCompleted). Its output is "name path" lines.
+    // probeTools). Its output is "name path" lines.
     Process {
         id: toolProbeProc
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: root.onToolProbe(text)
         }
+    }
+
+    // Automatic first-run / Retry installer for the pinned audio engine.
+    Process {
+        id: installEngineProc
+        running: false
+        onExited: function (exitCode) {
+            root.installingEngine = false;
+            if (root.shuttingDown)
+                return;
+            if (exitCode === 0) {
+                root.probeTools();
+            } else {
+                root.setupRequired = true;
+                root.errorMessage = Model.tr(root.language, "setupRequired");
+            }
+        }
+    }
+
+    Timer {
+        id: pendingEnginePlayTimer
+        interval: 600
+        repeat: false
+        onTriggered: {
+            if (!root.pendingEnginePlay)
+                return;
+            var p = root.pendingEnginePlay;
+            root.pendingEnginePlay = null;
+            root._playSurahOrDownload(p.id, p.n, p.autoplay, p.positionMs);
+        }
+    }
+
+    Timer {
+        id: proxyHandoffPollTimer
+        interval: 150
+        repeat: true
+        running: proxyProc.running && !root.proxyReady && !root.shuttingDown
+        onTriggered: proxyHandoffFile.reload()
     }
 
     // quranproxyd: range-caching stream proxy. Its stdout is the `promoted`

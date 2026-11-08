@@ -1,10 +1,14 @@
 {
   "mcpServers": {
     "quran-companion": {
-      "command": "python3",
+      "command": "sh",
       "args": [
-        "~/.config/omarchy/plugins/szaidi.quran/mcp/server.py"
+        "-c",
+        "exec python3 \"$HOME/.config/omarchy/plugins/szaidi.quran/mcp/server.py\""
       ]
+    },
+    "linear": {
+      "url": "https://mcp.linear.app/mcp"
     }
   }
 }

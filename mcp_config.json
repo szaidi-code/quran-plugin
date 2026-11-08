@@ -8,7 +8,8 @@
       ]
     },
     "linear": {
-      "url": "https://mcp.linear.app/mcp"
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.linear.app/mcp"]
     }
   }
 }
